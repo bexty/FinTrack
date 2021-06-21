@@ -17,11 +17,11 @@ USERSETTINGSID = 1
 
 TFHEIGTH = 36
 
-CALENDAR = 'calendar36.png'
-PERIOD = 'period36.png'
-ADD = 'plus36.png'
-SEARCH = 'search36.png'
-SETTINGS = 'settings36.png'
+CALENDAR = '/images/calendar36.png'
+PERIOD = '/images/period36.png'
+ADD = '/images/plus36.png'
+SEARCH = '/images/search36.png'
+SETTINGS = '/images/settings36.png'
 
 class GUI():
     def __init__(self, controller):
