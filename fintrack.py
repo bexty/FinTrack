@@ -1,16 +1,18 @@
-import sys, ui, dialogs, pickle, os, sqlite3, threading, datetime, ctypes, console, clipboard
+import sys, ui, dialogs, os, sqlite3, datetime, console, clipboard, collections
 
 DB = '/private/var/mobile/Library/Mobile Documents/iCloud~com~omz-software~Pythonista3/Documents/FinTrack/fintrack.db' #sqlite3 db
-
+DEFAULTFORMATDAY = '%Y-%m-%d' #defaul date format from sqlite3
 TABLECELLLENGHT = 30 #количесвто символов, которое помещается в одной строке таблицы (когда категория открыта), зависит от размера шрифта SMALLFONT
 SMALLFONT = ('<system>', 14) #размер шрифта в таблице в открытой категории (он меньше чем шрифт самой категории)
-INITIALMODE = 'M' #режим, в котором стартует приложение по умолчанию, D = Date, M = Month, Y = Year, A = All time
 
-CURRENCYSYMBOL =  ' ₽'
-DEFAULTDATEFORMATDAY = '%Y-%m-%d' #defaul date format from sqlite3
-LOCALDATEFORMATDAY = '%d.%m.%Y' #can be changed for your local format, this is the Europe (Russia)
-LOCALDATEFORMATMONTH = '%B %Y'
-LOCALDATEFORMATYEAR = '%Y'
+DEFAULTCATEGORIES = 'Food\tCinema\tCar'
+INITIALMODE = 'Month' #режим, в котором стартует приложение по умолчанию, D = Date, M = Month, Y = Year, A = All time
+CURRENCYSYMBOL =  '₽'
+LOCALDATEFORMAT = {'Europe':{'day':'%d.%m.%Y', 'month':'%B %Y', 'year':'%Y', 'short':'%d.%m.%y'},
+                    'Japan':{'day':'%Y.%m.%d', 'month':'%B %Y', 'year':'%Y', 'short':'%y.%m.%d'},
+                    'USA':{'day':'%m/%d/%Y', 'month':'%B %Y', 'year':'%Y', 'short':'%m/%d/%y'}}
+DEFAULTSETTINGSID = 0
+USERSETTINGSID = 1
 
 CALENDAR = 'calendar36.png'
 PERIOD = 'period36.png'
@@ -18,144 +20,37 @@ ADD = 'plus36.png'
 SEARCH = 'search36.png'
 SETTINGS = 'settings36.png'
 
-PERIODTABLEWIDTH = 150
-PERIODTABLEHEIGHT = 300
-
-DATEPICKERHEIGHT = 180
-DATEPICKERDONEBUTTONHEIGHT = 72
-DPDONEBUTTONINTRANSACTIONHEIGHT = 54
-TEXTFIELDHEIGHT = 54
-BUTTONSFONT = ('<system-bold>', 20) #так регулируется высота кнопок, а не параметром heigth
-
 class GUI():
     def __init__(self, controller):
         self.controller = controller
 
-        self.mode = 'start' #тут хранится состояние гуя. Оно используется в обработчиках кнопок, textField, datePicker и т. д.
         self.result = None #тут хранится результат того или иного взаимодейсвтия с gui, который будет потом передан в соответствующий метод logic
-        self.event = threading.Event() #флаг для ожидания пользовательского ввода в отдельном потоке
-        self.categories = self.controller.getCategories() #список категорий, нужен при добавлении транзакции
 
         self.periodButton = ui.Button(image=ui.Image.named(PERIOD),
-            action=self._periodButtonAction,
+            action=self.periodButtonAction,
             alpha=0.0)
         self.calendarButton = ui.Button(image=ui.Image.named(CALENDAR),
-            action=self._calendarButtonAction,
+            action=self.calendarButtonAction,
             alpha=0.0)
         self.settingsButton = ui.Button(image=ui.Image.named(SETTINGS),
-            action=self._settingsButtonAction,
+            action=self.settingsButtonAction,
             alpha=0.0)
         self.searchButton = ui.Button(image=ui.Image.named(SEARCH),
-            action=self._searchButtonAction,
+            action=self.searchButtonAction,
             alpha=0.0)
         self.addButton = ui.Button(image=ui.Image.named(ADD),
-            action=self._addButtonAction,
+            action=self.addButtonAction,
             alpha=0.0)
         self.mainTableDataSource = self.DbListDataSource(items=None,
-            action=self._mainTableRowSelectedAction,
-            editAction=self._mainTableRowDeletedAction,
-            accessoryAction=self._mainTableRowAccessoryTapedAction)
+            action=self.mainTableRowSelectedAction,
+            editAction=self.mainTableRowDeletedAction,
+            accessoryAction=self.mainTableRowAccessoryTapedAction)
         self.mainTable = ui.TableView(data_source=self.mainTableDataSource,
             delegate=self.mainTableDataSource,
             editing = False,
             alpha=0.0)
-        self.periodTableDataSource = self.TitledListDataSource(items=('Day',
-                    'Month',
-                    'Year',
-                    'Period',
-                    'All time'),
-            title='Period?',
-            action=self._periodTableRowSelectedAction)
-        self.periodTable = ui.TableView(data_source=self.periodTableDataSource,
-            delegate=self.periodTableDataSource,
-            editing=False,
-            border_width=2,
-            corner_radius=5,
-            width=PERIODTABLEWIDTH,
-            height=PERIODTABLEHEIGHT,
-            scroll_enabled=False,
-            alpha=0.0)
-        self.datePicker = ui.DatePicker(name='Дата?',
-            mode=ui.DATE_PICKER_MODE_DATE,
-            action=self._datePickerAction,
-            background_color='white',
-            border_color='black',
-            border_width=2,
-            corner_radius=5,
-            height=DATEPICKERHEIGHT,
-            alpha=0.0)
-        self.datePickerDoneButton = ui.Button(title='Done',
-            font=BUTTONSFONT,
-            action=self._datePickerDoneButtonAction,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            height=DATEPICKERDONEBUTTONHEIGHT,
-            alpha = 0.0)
-        self.textField = ui.TextField(delegate=self.MyTextFieldDelegate(textFieldDidChangedAction=self._textFieldDidChanged, textFieldShouldReturnAction=self._textFieldEnterButtonAction),
-            placeholder='',
-            height=TEXTFIELDHEIGHT,
-            border_color='black',
-            border_width=2,
-            corner_radius=5,
-            alpha=0.0)
-        self.textFieldEnterButton = ui.Button(title='Enter',
-            action=self._textFieldEnterButtonAction,
-            font=BUTTONSFONT,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            alpha=0.0,
-            enabled=False)
-        self.textFieldDoneButton = ui.Button(title='Done',
-            action=self._textFieldDoneButtonAction,
-            font=BUTTONSFONT,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            alpha=0.0,
-            enabled=False)
-        self.textFieldCalendarButton = ui.Button(title='📆',
-            action=self._textFieldelCalendarButtonAction,
-            font=BUTTONSFONT,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            alpha=0.0)
-        self.textFieldCancelButton = ui.Button(title='❌',
-            action=self._textFieldCancelButtonAction,
-            font=BUTTONSFONT,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            alpha=0.0)
-        self.textFieldDatePicker = ui.DatePicker(name='Дата?',
-            mode=ui.DATE_PICKER_MODE_DATE,
-            action=self._textFieldDatePickerAction,
-            background_color='white',
-            border_color='black',
-            border_width=2,
-            corner_radius=5,
-            height=DATEPICKERHEIGHT,
-            alpha=0.0)
-        self.textFieldDatePickerDoneButton = ui.Button(title='Done',
-            font=BUTTONSFONT,
-            action=self._textFieldDatePickerDoneButtonAction,
-            background_color='ceced2',
-            border_width=1,
-            border_color='white',
-            corner_radius=5,
-            height=DATEPICKERDONEBUTTONHEIGHT,
-            alpha = 0.0)
 
-        self.view = self.MyView(keyboardFrameChangedAction=self.subViewsResize,
-            layoutChangedAction=self.subViewsResize,
-            name='',            
+        self.view = self.MyView(name='',
             flex='WH',
             background_color='white')
 
@@ -165,342 +60,8 @@ class GUI():
         self.view.add_subview(self.searchButton)
         self.view.add_subview(self.addButton)
         self.view.add_subview(self.mainTable)
-        self.view.add_subview(self.periodTable)
-        self.view.add_subview(self.datePicker)
-        self.view.add_subview(self.datePickerDoneButton)
-        self.view.add_subview(self.textField)
-        self.view.add_subview(self.textFieldEnterButton)
-        self.view.add_subview(self.textFieldDoneButton)
-        self.view.add_subview(self.textFieldCalendarButton)
-        self.view.add_subview(self.textFieldCancelButton)
-        self.view.add_subview(self.textFieldDatePicker)
-        self.view.add_subview(self.textFieldDatePickerDoneButton)
+
         self.view.present(hide_close_button=False, style='popover', orientations=['portrait'])
-        
-        def present():
-            self.periodButton.alpha = 1.0
-            self.calendarButton.alpha = 1.0
-            self.settingsButton.alpha = 1.0
-            self.searchButton.alpha = 1.0
-            self.addButton.alpha = 1.0
-            self.mainTable.alpha = 1.0
-        ui.animate(present)
-
-    def _periodButtonAction(self, sender):
-        #дальнейшие действия происходят в _periodTableRowSelectedAction
-        def present():
-            self.periodButton.enabled = False
-            self.calendarButton.enabled = False
-            self.settingsButton.enabled = False
-            self.searchButton.enabled = False
-            self.addButton.enabled = False
-            self.mainTable.touch_enabled = False
-            self.mainTable.alpha = 0.5
-            self.periodTable.alpha = 1.0
-
-        ui.animate(present)
-
-    @ui.in_background
-    def _calendarButtonAction(self, sender):
-        def present():
-            self.periodButton.enabled = False
-            self.calendarButton.enabled = False
-            self.settingsButton.enabled = False
-            self.searchButton.enabled = False
-            self.addButton.enabled = False
-            self.mainTable.touch_enabled = False
-            self.mainTable.alpha = 0.5
-            self.datePickerDoneButton.title = 'Done'
-            self.datePickerDoneButton.center = (self.datePickerDoneButton.superview.width/2,
-                    (self.datePickerDoneButton.superview.height-self.addButton.height-self.datePickerDoneButton.height/2))
-            self.datePicker.center = (self.datePicker.superview.width/2,
-                self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
-            self.datePicker.alpha = 1.0
-            self.datePickerDoneButton.alpha = 1.0
-        
-        def hide():
-            self.periodButton.enabled = True
-            self.calendarButton.enabled = True
-            self.settingsButton.enabled = True
-            self.searchButton.enabled = True
-            self.addButton.enabled = True
-            self.mainTable.touch_enabled = True
-            self.mainTable.alpha = 1.0
-            self.datePicker.alpha = 0.0
-            self.datePickerDoneButton.alpha = 0.0
-
-        def exit():
-            self.controller.calendarButtonAction(self.result)
-
-        self.event.clear()
-        ui.animate(present)
-        self.event.wait()
-        self.result = self.datePicker.date
-        ui.animate(hide, completion=exit)        
-
-    @ui.in_background
-    def _settingsButtonAction(self, sender):
-        print(dialogs.list_dialog(title='Period?', items=['Day', 'Month', 'Year', 'All time', 'Custom period']))
-
-    @ui.in_background
-    def _searchButtonAction(self, sender):
-        print(dialogs.date_dialog(title='Date?'))
-
-    @ui.in_background
-    def _addButtonAction(self, sender, transactionData=None):
-        def present():
-            self.mainTable.alpha = 0.5
-            self.mainTable.touch_enabled = False
-
-            self.periodButton.enabled = False
-            self.calendarButton.enabled = False
-            self.settingsButton.enabled = False
-            self.searchButton.enabled = False
-            self.addButton.enabled = False
-
-            self.textFieldCancelButton.enabled = True
-            self.textFieldCalendarButton.enabled = True
-            self.textFieldEnterButton.enabled = False
-            self.textFieldDoneButton.enabled = False
-
-        def hide():
-            self.textFieldCancelButton.alpha = 0
-            self.textFieldCalendarButton.alpha = 0
-            self.textFieldEnterButton.alpha = 0
-            self.textFieldDoneButton.alpha = 0
-            self.textField.alpha = 0
-
-            self.textFieldCancelButton.enabled = False
-            self.textFieldCalendarButton.enabled = False
-            self.textFieldEnterButton.enabled = False
-            self.textFieldDoneButton.enabled = False
-
-            self.periodButton.enabled = True
-            self.calendarButton.enabled = True
-            self.settingsButton.enabled = True
-            self.searchButton.enabled = True
-            self.addButton.enabled = True
-
-            self.mainTable.alpha = 1.0
-            self.mainTable.touch_enabled = True
-
-        def exit():
-            if self.status == 'addingTransaction' or self.status == 'doneTransaction':
-                self.status = 'start'
-                self.controller.addButtonAction(self.result)
-                self.update(self.controller.getNameForMainTable(), self.controller.getItemsForMainTable())
-
-        ui.animate(present)
-
-        self.status = 'addingTransaction'
-
-        if transactionData:
-            self.result = transactionData
-        else:
-            self.result = {'id':None, 'name':None, 'category':None,'price':None, 'date':None, 'note':None}
-        
-        #запрос категории
-        if self.status == 'addingTransaction':
-            selectedCategory = dialogs.list_dialog(title='Категория?', items=self.categories, multiple=False)
-
-            if selectedCategory == None:
-                self.status = 'start'
-            else:
-                self.result['category'] = selectedCategory
-        
-        #запрос цены
-        if self.status == 'addingTransaction':
-            self.event.clear() #ставим флаг ожидания ответа от пользователя, снимается он в enter() по нажатию кнопки Enter
-            self.textFieldCancelButton.alpha = 1.0
-            self.textFieldCalendarButton.alpha = 1.0
-            self.textFieldEnterButton.alpha = 1.0
-            self.textFieldDoneButton.alpha = 1.0
-            self.textField.alpha = 1.0
-            if self.result['price']:
-                self.textField.text = str(self.result['price'])
-            else:
-                self.textField.text=''
-            self.textField.placeholder = 'Цена?'
-            self.textField.keyboard_type = ui.KEYBOARD_DECIMAL_PAD
-            self.textField.begin_editing()
-            self.event.wait() #ожидаем пользовательского ввода, ждем до снятия флага, снимается он в self.textFieldEnterButton() по нажатию кнопки Enter
-            self.textField.end_editing()
-            self.textFieldEnterButton.enabled = False
-            if self.textField.text != '':
-                price = self.textField.text.replace(',','.') #чтобы десятичные дроби нормально понимал
-                self.result['price'] = float(price)
-            else:
-                self.status = 'start'
-
-        #запрос имени
-        if self.status == 'addingTransaction':
-            self.event.clear()
-            if self.result['name']:
-                self.textField.text = self.result['name']
-            else:
-                self.textField.text=''
-            self.textField.placeholder = 'Имя?'
-            self.textField.keyboard_type = ui.KEYBOARD_DEFAULT
-            self.textField.begin_editing()
-            self.textFieldDoneButton.enabled = True
-            self.event.wait()
-            self.textField.end_editing()
-            self.textFieldEnterButton.enabled = False
-            self.result['name'] = self.textField.text
-        elif self.status == 'doneTransaction':
-            self.result['name'] = '' #записываем пустую строку, а не None, т. к. это поле необязательное
-
-        ui.animate(hide, completion=exit)
-
-    def _mainTableRowSelectedAction(self, sender):
-        #sender = tableView.datasource from GUI
-        if sender.items[sender.selected_section]['sectionState'] == 'collapsed': #нажата секция для развертывания списка
-            sender.items[sender.selected_section]['sectionState'] = 'expanded'
-            insertList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
-            sender.tableview.insert_rows(insertList)
-            sender.reload()
-        elif sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName'] == 'Total:': #нажата строка Total для сворачивания списка
-            sender.items[sender.selected_section]['sectionState'] = 'collapsed'
-            #deleteList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
-            #sender.tableview.delete_rows(deleteList) #как-то некрасиво работает, лучше уж совсем без анимации
-            sender.reload()
-        else: #нажата конкретная транзакция для ее редактирования
-            rowId = (sender.items[sender.selected_section]['rows'][sender.selected_row]['rowId'])
-            sender.reload()
-            transactionData = self.controller.getTransaction(rowId)
-            self._addButtonAction(None, transactionData)
-
-    def _mainTableRowDeletedAction(self, sender, rowId, rowSum):
-        self.controller.mainTableRowDeletedAction(sender, rowId, rowSum)
-        sender.reload()
-
-    def _mainTableRowAccessoryTapedAction(self, sender):
-        self.result = sender
-        self.controller.mainTableRowAccessoryTapedAction(self.result)
-
-    @ui.in_background
-    def _periodTableRowSelectedAction(self, sender):
-        def hide():
-            self.datePicker.alpha = 0.0
-            self.datePickerDoneButton.alpha = 0.0
-            self.periodTable.alpha = 0.0
-            self.periodButton.enabled = True
-            self.calendarButton.enabled = True
-            self.settingsButton.enabled = True
-            self.searchButton.enabled = True
-            self.addButton.enabled = True
-            self.mainTable.touch_enabled = True
-            self.mainTable.alpha = 1.0
-
-        def exit():
-            self.controller.periodButtonAction(self.result)
-
-        if sender.items[sender.selected_row] == 'Period':
-            #далее действия происходят в _datePickerAction и _datePickerDoneButtonAction
-            def presentFromDate():
-                self.datePickerDoneButton.center = (self.datePickerDoneButton.superview.width/2,
-                    (self.datePickerDoneButton.superview.height-self.addButton.height-self.datePickerDoneButton.height/2))
-                self.datePicker.center = (self.datePicker.superview.width/2,
-                    self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
-                
-                self.datePickerDoneButton.title = ('From '+self.datePicker.date.strftime(LOCALDATEFORMATDAY))
-                self.datePickerDoneButton.enabled = True
-                self.periodTable.alpha = 0.0
-                self.datePicker.alpha = 1.0
-                self.datePickerDoneButton.alpha = 1.0
-            
-            def hidePeriod():
-                self.datePicker.alpha = 0.0
-                self.datePickerDoneButton.alpha = 0.0
-
-            def presentToDate():
-                self.datePickerDoneButton.center = (self.datePickerDoneButton.superview.width/2,
-                    (self.datePickerDoneButton.superview.height-self.addButton.height-self.datePickerDoneButton.height/2))
-                self.datePicker.center = (self.datePicker.superview.width/2,
-                    self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
-                self.datePickerDoneButton.title = ('To '+self.datePicker.date.strftime(LOCALDATEFORMATDAY))
-                self.datePicker.alpha = 1.0
-                self.datePickerDoneButton.alpha = 1.0
-
-            self.mode = 'selectingFromDate'
-            self.event.clear()            
-            ui.animate(presentFromDate)
-            self.event.wait() #ожидаем пользовательского ввода, ждем до снятия флага, снимается он в _datePickerDoneButtonAction
-            fromDate = self.datePicker.date
-            ui.animate(hidePeriod)
-            self.mode = 'selectingToDate'
-            self.event.clear()
-            ui.animate(presentToDate)
-            self.event.wait()
-            toDate = self.datePicker.date
-            self.mode = 'start'
-            self.result = (sender.items[sender.selected_row], fromDate, toDate)
-        else:        
-            self.result = (sender.items[sender.selected_row], )
-        
-        ui.animate(hide, completion=exit)
-
-    def _datePickerAction(self, sender): #тут будем менять заголовок кнопки datePickerDoneButton в режиме выбора периода дат, с 'From datePicker.date' на 'To datePickerDate'
-        if self.mode == 'selectingFromDate':
-            self.datePickerDoneButton.title = 'From   ' + self.datePicker.date.strftime(LOCALDATEFORMATDAY)
-        elif self.mode == 'selectingToDate':
-            self.datePickerDoneButton.title = 'To   ' + self.datePicker.date.strftime(LOCALDATEFORMATDAY)
-        else:
-            pass
-
-    def _datePickerDoneButtonAction(self, sender):
-        self.event.set()
-
-    def _textFieldDidChanged(self, textfield):
-        if self.textField.text != '':
-            self.textFieldEnterButton.enabled = True
-            self.textFieldDoneButton.enabled = True
-        else:
-            self.textFieldEnterButton.enabled = False
-            self.textFieldDoneButton.enabled = False
-    
-    def _textFieldEnterButtonAction(self, sender):
-        self.event.set()
-
-    def _textFieldDoneButtonAction(self, sender):
-        self.status = 'doneTransaction'
-        self.event.set()
-
-    def _textFieldelCalendarButtonAction(self, sender):
-        self.textFieldDatePickerDoneButton.enabled = True
-        self.textFieldDatePickerDoneButton.alpha = 1.0
-        self.textFieldDatePicker.alpha = 1.0
-
-        self.textFieldCancelButton.enabled = False
-        self.textFieldCalendarButton.enabled = False
-        self.textFieldEnterButton.enabled = False
-        self.textFieldDoneButton.enabled = False
-
-    def _textFieldCancelButtonAction(self, sender):
-        self.status = 'start'
-        self.event.set()
-
-    def _textFieldDatePickerAction(self, sender):
-        pass
-
-    def _textFieldDatePickerDoneButtonAction(self, sender):
-        self.result['date'] = str(self.textFieldDatePicker.date)
-        def hide():
-            self.textFieldDatePicker.alpha = 0
-            self.textFieldDatePickerDoneButton.alpha = 0
-            #self.textField.enabled = True
-            self.textFieldCancelButton.enabled = True
-            self.textFieldCalendarButton.enabled = True
-            if self.textField.text != '':
-                self.textFieldEnterButton.enabled = True
-            if self.result['category'] != None and self.textField.text != '':
-                self.textFieldDoneButton.enabled = True
-        ui.animate(hide)
-
-    def subViewsResize(self):
-        #сюда попадаем либо при ручном вызове, либо атвоматически при изменении self.view.layout (например поворот экрана), либо при появлении/скрытии клавиатуры. Это описано в class MyView(ui.View)
-        #высоты элементов задаются при создании элементов
-        #ширины основных кнопок зависят от картинок
         
         self.periodButton.center = (self.periodButton.superview.width*0.1,
             (self.periodButton.superview.height-(self.periodButton.height/2)))
@@ -516,54 +77,137 @@ class GUI():
         self.mainTable.height = (self.mainTable.superview.height-self.periodButton.height)
         self.mainTable.center = (self.mainTable.superview.width/2,
             (self.mainTable.superview.height-self.periodButton.height-(self.mainTable.height/2)))
-        self.periodTable.size_to_fit() #выставляет только высоту почему-то
-        self.periodTable.center = (self.periodTable.width/2,
-            (self.periodTable.superview.height - self.periodButton.height - self.periodTable.height/2))
+
+        def present():    
+            self.periodButton.alpha = 1.0
+            self.calendarButton.alpha = 1.0
+            self.settingsButton.alpha = 1.0
+            self.searchButton.alpha = 1.0
+            self.addButton.alpha = 1.0
+            self.mainTable.alpha = 1.0
+        ui.animate(present)
+
+    @ui.in_background
+    def periodButtonAction(self, sender):
+        a = dialogs.list_dialog(title='Period?', items=('Day', 'Month', 'Year', 'All time', 'Custom period'), multiple=False)
+        if a:
+            if a == 'All time':
+                self.calendarButton.enabled = False
+                self.result = {'mode':a}
+            elif a == 'Custom period':
+                self.calendarButton.enabled = False
+                fields = [{'type':'date', 'title':'From date:\t', 'key':'fromDate'},
+                            {'type':'date', 'title':'To date:\t', 'key':'toDate'}]
+                dates = dialogs.form_dialog(title='Choose period', fields=fields)
+                if dates:
+                    self.result = {'mode':a, 'fromDate':dates['fromDate'], 'toDate':dates['toDate']}
+                else:
+                    self.result = {'mode':self.controller.settings['initialMode']}
+                    self.calendarButton.enabled = True
+            else:
+                self.calendarButton.enabled = True
+                self.result = {'mode':a}
+            self.controller.periodButtonAction(self.result)
+
+    @ui.in_background
+    def calendarButtonAction(self, sender):
+        self.result = dialogs.date_dialog(title='Choose date')
+        if self.result:
+            self.controller.calendarButtonAction(self.result)
+
+    @ui.in_background
+    def settingsButtonAction(self, sender):
+        initialMode = [{'type':'check', 'title':'Day', 'group':'initialMode', 'value':True if self.controller.settings['initialMode'] == 'Day' else False},
+                        {'type':'check', 'title':'Month', 'group':'initialMode', 'value':True if self.controller.settings['initialMode'] == 'Month' else False},
+                        {'type':'check', 'title':'Year', 'group':'initialMode', 'value':True if self.controller.settings['initialMode'] == 'Year' else False},
+                        {'type':'check', 'title':'All time', 'group':'initialMode', 'value':True if self.controller.settings['initialMode'] == 'All time' else False}]
         
-        self.datePickerDoneButton.width = self.datePickerDoneButton.superview.width
-        self.datePickerDoneButton.center = (self.datePickerDoneButton.superview.width/2,
-            self.periodButton.frame[1] - self.datePickerDoneButton.height/2)
-        self.datePicker.width = self.datePicker.superview.width
-        self.datePicker.center = (self.datePicker.superview.width/2,
-            self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
+        dateFormats = [{'type':'check', 'title':'Europe', 'group':'localDateFormat', 'value':True if self.controller.settings['localDateFormat'] == 'Europe' else False},
+                        {'type':'check', 'title':'Japan', 'group':'localDateFormat', 'value':True if self.controller.settings['localDateFormat'] == 'Japan' else False},
+                        {'type':'check', 'title':'USA', 'group':'localDateFormat', 'value':True if self.controller.settings['localDateFormat'] == 'USA' else False}]
 
-        if self.view.keyboardFrame == (0.00, 0.00, 0.00, 0.00): #клавиатура на экране отсутствует
-            self.textField.alpha = 0.0
-            self.textFieldCancelButton.alpha = 0.0
-            self.textFieldCalendarButton.alpha = 0.0
-            self.textFieldEnterButton.alpha = 0.0
-            self.textFieldDoneButton.alpha = 0.0
-        else: #клавиатура на экране присутствует
-            base = self.view.keyboardFrame[1]
-            
-            self.textFieldCancelButton.width = self.textFieldCancelButton.superview.width/8
-            self.textFieldCancelButton.center = (self.textFieldCancelButton.superview.width/16,
-                base - self.textFieldCancelButton.height/2)
-            self.textFieldCalendarButton.width = self.textFieldCalendarButton.superview.width/8
-            self.textFieldCalendarButton.center = (self.textFieldCalendarButton.superview.width*0.1875,
-                base - self.textFieldCalendarButton.height/2)
-            self.textFieldEnterButton.width = self.textFieldEnterButton.superview.width/2
-            self.textFieldEnterButton.center = (self.textFieldEnterButton.superview.width/2,
-                base - self.textFieldEnterButton.height/2)
-            self.textFieldDoneButton.width = self.textFieldDoneButton.superview.width/4
-            self.textFieldDoneButton.center = (self.textFieldDoneButton.superview.width*0.875,
-                base - self.textFieldDoneButton.height/2)
-            self.textField.width = self.textField.superview.width
-            self.textField.center = (self.textField.superview.width/2,
-                base - self.textFieldCancelButton.height-self.textField.height/2)
+        currencySymbol = [{'type':'text', 'title':'Currency symbol:\t', 'key':'currencySymbol', 'value':self.controller.settings['currencySymbol']}]
+        
+        categories = []
+        for i in self.controller.settings['categories']:
+            a = {'title':i, 'group':'categories'}
+            categories.append(a)
+        
+        addCategory = [{'type':'text', 'title':'New category name:\t', 'key':'newCategory'}]
 
-            self.textField.alpha = 1.0
-            self.textFieldCancelButton.alpha = 1.0
-            self.textFieldCalendarButton.alpha = 1.0
-            self.textFieldEnterButton.alpha = 1.0
-            self.textFieldDoneButton.alpha = 1.0
+        resetToDefaultSettings = [{'type':'switch', 'title':'Reset to default settings', 'key':'reset'}]
+        
+        items = [('Start mode:', initialMode),
+                ('Local date formats:', dateFormats),
+                ('Currency symbol:', currencySymbol),
+                ('Categories:', categories),
+                ('Add new category:', addCategory),
+                ('Reset to default settings (except categories):', resetToDefaultSettings)]
 
-        self.textFieldDatePickerDoneButton.width = self.textFieldDatePickerDoneButton.superview.width
-        self.textFieldDatePickerDoneButton.center = (self.textFieldDatePickerDoneButton.superview.width/2,
-            self.textField.frame[1] - self.textFieldDatePickerDoneButton.height/2)
-        self.textFieldDatePicker.width = self.textFieldDatePicker.superview.width
-        self.textFieldDatePicker.center = (self.textFieldDatePicker.superview.width/2,
-            self.textFieldDatePickerDoneButton.frame[1]-self.datePicker.height/2)        
+        settings = self.settings_dialog(title='Settings', sections=items)
+        if settings:
+            self.controller.settingsButtonAction(settings)
+
+    @ui.in_background
+    def searchButtonAction(self, sender):
+        if self.searchButtonAction:
+            self.searchButtonAction(self.result)
+
+    @ui.in_background
+    def addButtonAction(self, sender, transactionData=None):
+        if transactionData: #если редактируем существующую транзакцию
+            transactionId = transactionData['id']
+            mainData = [{'type':'number', 'title':'Price:\t', 'key':'price', 'value':str(transactionData['price'])},
+                {'type':'text', 'title':'Name:\t', 'key':'name', 'value':transactionData['name']},
+                {'type':'date', 'title':'Date:\t', 'key':'date', 'value':datetime.datetime.strptime(transactionData['date'], '%Y-%m-%d %H:%M:%S')},
+                {'type':'text', 'title':'Note:\t', 'key':'note', 'value':transactionData['note']}]
+        else: #если создаем новую транзакцию
+            transactionId = None
+            mainData = [{'type':'number', 'title':'Price:\t', 'key':'price'},
+                {'type':'text', 'title':'Name:\t', 'key':'name'},
+                {'type':'date', 'title':'Date:\t', 'key':'date'},
+                {'type':'text', 'title':'Note:\t', 'key':'note'}]
+
+        categories = []
+        for i in self.controller.settings['categories']:
+            a = {'type':'check', 'title':i, 'group':'category'}
+            categories.append(a)
+        categories.append({'type':'text', 'title':'New category name:\t', 'key':'newCategory'}) #в конце добавляем textField для ввода новой категории
+
+        items = [('Price, name, date?', mainData), ('Category?', categories)]
+
+        tfSteps = ['price', 'name'] #порядок активации textField'ов в авторежиме по нажатию кнопки enter на клавиатуре, key-параметры строк в таблице
+
+        transaction = self.transaction_dialog(title='Add transaction', sections=items, tfSteps=tfSteps)
+        if transaction:
+            self.controller.addButtonAction(transaction, transactionId)
+            self.update(self.controller.getNameForMainTable(), self.controller.getItemsForMainTable())
+
+    def mainTableRowSelectedAction(self, sender):
+        #sender = tableView.datasource from GUI
+        if sender.items[sender.selected_section]['sectionState'] == 'collapsed': #нажата секция для развертывания списка
+            sender.items[sender.selected_section]['sectionState'] = 'expanded'
+            insertList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
+            sender.tableview.insert_rows(insertList)
+            sender.reload()
+        elif sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName'] == 'Total:': #нажата строка Total для сворачивания списка
+            sender.items[sender.selected_section]['sectionState'] = 'collapsed'
+            #deleteList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
+            #sender.tableview.delete_rows(deleteList) #как-то некрасиво работает, лучше уж совсем без анимации
+            sender.reload()
+        else: #нажата конкретная транзакция для ее редактирования
+            rowId = (sender.items[sender.selected_section]['rows'][sender.selected_row]['rowId'])
+            sender.reload()
+            transactionData = self.controller.getTransaction(rowId)
+            self.addButtonAction(None, transactionData)
+
+    def mainTableRowDeletedAction(self, sender, rowId, rowSum):
+        self.controller.mainTableRowDeletedAction(sender, rowId, rowSum)
+        sender.reload()
+
+    def mainTableRowAccessoryTapedAction(self, sender):
+        self.result = sender
+        self.controller.mainTableRowAccessoryTapedAction(self.result)
 
     def deleteRows(self, rowsToDelete):
         self.mainTable.delete_rows(rowsToDelete)
@@ -572,6 +216,814 @@ class GUI():
         self.view.name = name
         self.mainTableDataSource.items = tableItems
         self.mainTable.reload()
+
+    def transaction_dialog(self, title='', fields=None, sections=None, done_button_title='Done', tfSteps=None):
+        #from dialogs
+        if not sections and not fields:
+            raise ValueError('sections or fields are required')
+        if not sections:
+            sections = [('', fields)]
+        if not isinstance(title, str):
+            raise TypeError('title must be a string')
+        for section in sections:
+            if not isinstance(section, collections.Sequence):
+                raise TypeError('Sections must be sequences (title, fields)')
+            if len(section) < 2:
+                raise TypeError('Sections must have 2 or 3 items (title, fields[, footer]')
+            if not isinstance(section[0], str):
+                raise TypeError('Section titles must be strings')
+            if not isinstance(section[1], collections.Sequence):
+                raise TypeError('Expected a sequence of field dicts')
+            for field in section[1]:
+                if not isinstance(field, dict):
+                    raise TypeError('fields must be dicts')
+
+        c = self.TransactionDialogController(title, sections, done_button_title=done_button_title, tfSteps=tfSteps)
+        c.container_view.present()
+
+        c.view[tfSteps[0]].content_view[tfSteps[0]].begin_editing() #смотри TransactionDialogController.textfield_should_return
+        c.container_view.wait_modal()
+        # Get rid of the view to avoid a retain cycle:
+        c.container_view = None
+        if c.was_canceled:
+            return None
+        else:
+            return c.values
+    
+    def settings_dialog(self, title='', fields=None, sections=None, done_button_title='Done'):
+        #from dialogs
+        if not sections and not fields:
+            raise ValueError('sections or fields are required')
+        if not sections:
+            sections = [('', fields)]
+        if not isinstance(title, str):
+            raise TypeError('title must be a string')
+        for section in sections:
+            if not isinstance(section, collections.Sequence):
+                raise TypeError('Sections must be sequences (title, fields)')
+            if len(section) < 2:
+                raise TypeError('Sections must have 2 or 3 items (title, fields[, footer]')
+            if not isinstance(section[0], str):
+                raise TypeError('Section titles must be strings')
+            if not isinstance(section[1], collections.Sequence):
+                raise TypeError('Expected a sequence of field dicts')
+            for field in section[1]:
+                if not isinstance(field, dict):
+                    raise TypeError('fields must be dicts')
+
+        c = self.SettingsDialogController(title, sections, done_button_title=done_button_title)
+        c.container_view.present()
+        c.container_view.wait_modal()
+        # Get rid of the view to avoid a retain cycle:
+        c.container_view = None
+        if c.was_canceled:
+            return None
+        else:
+            return c.values
+    
+    class TransactionDialogController ():
+        #from dialogs
+        def __init__(self, title, sections, done_button_title='Done', tfSteps=None):
+            self.was_canceled = True
+            self.shield_view = None
+            self.values = {}
+            self.container_view = GUI.FormContainerView()
+            self.container_view.frame = (0, 0, 500, 500)
+            self.container_view.delegate = self
+            self.view = ui.TableView('grouped')
+            self.view.flex = 'WH'
+            self.container_view.add_subview(self.view)
+            self.container_view.name = title
+            self.view.frame = (0, 0, 500, 500)
+            self.view.data_source = self
+            self.view.delegate = self
+            self.cells = []
+
+            self.offset = (0, 240) #позиция на которую скроллится view при нажатии Enter в последнем textField'е. Переходим сразу ниже к категориям
+            self.tfSteps = tfSteps #порядок активации textField'ов в авторежиме по нажатию кнопки enter на клавиатуре, key-параметры строк в таблице
+
+            self.sections = sections
+            
+            for section in self.sections:
+                section_cells = []
+                self.cells.append(section_cells)
+                items = section[1]
+                for i, item in enumerate(items):
+                    cell = ui.TableViewCell('value1')
+                    cell.name = item.get('key', None) #добавляем имя для ячейки, для дальнейшей идентификации
+                    icon = item.get('icon', None)
+                    tint_color = item.get('tint_color', None)
+                    if tint_color:
+                        cell.tint_color = tint_color
+                    if icon:
+                        if isinstance(icon, str):
+                            icon = ui.Image.named(icon)
+                        if tint_color:
+                            cell.image_view.image = icon.with_rendering_mode(ui.RENDERING_MODE_TEMPLATE)
+                        else:
+                            cell.image_view.image = icon
+                        
+                    title_color = item.get('title_color', None)
+                    if title_color:
+                        cell.text_label.text_color = title_color
+                    
+                    t = item.get('type', None)
+                    key = item.get('key', item.get('title', str(i)))
+                    item['key'] = key
+                    title = item.get('title', '')
+                    if t == 'switch':
+                        value = item.get('value', False)
+                        self.values[key] = value
+                        cell.text_label.text = title
+                        cell.selectable = False
+                        switch = ui.Switch()
+                        w, h = cell.content_view.width, cell.content_view.height
+                        switch.center = (w - switch.width/2 - 10, h/2)
+                        switch.flex = 'TBL'
+                        switch.value = value
+                        switch.name = key
+                        switch.action = self.switch_action
+                        if tint_color:
+                            switch.tint_color = tint_color
+                        cell.content_view.add_subview(switch)
+                    elif t == 'text' or t == 'url' or t == 'email' or t == 'password' or t == 'number':
+                        value = item.get('value', '')
+                        self.values[key] = value
+                        placeholder = item.get('placeholder', '')
+                        cell.selectable = False
+                        cell.text_label.text = title
+                        label_width = ui.measure_string(title, font=cell.text_label.font)[0]
+                        if cell.image_view.image:
+                            label_width += min(64, cell.image_view.image.size[0] + 16)
+                        cell_width, cell_height = cell.content_view.width, cell.content_view.height
+                        tf = ui.TextField()
+                        tf_width = max(40, cell_width - label_width - 32)
+                        tf.frame = (cell_width - tf_width - 8, 1, tf_width, cell_height-2)
+                        tf.bordered = False
+                        tf.placeholder = placeholder
+                        tf.flex = 'W'
+                        tf.text = value
+                        tf.text_color = '#337097'
+                        if t == 'text':
+                            tf.autocorrection_type = item.get('autocorrection', None)
+                            tf.autocapitalization_type = item.get('autocapitalization', ui.AUTOCAPITALIZE_SENTENCES)
+                            tf.spellchecking_type = item.get('spellchecking', None)
+                        if t == 'url':
+                            tf.keyboard_type = ui.KEYBOARD_URL
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'email':
+                            tf.keyboard_type = ui.KEYBOARD_EMAIL
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'number':
+                            tf.keyboard_type = ui.KEYBOARD_NUMBERS
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'password':
+                            tf.secure = True
+                        
+                        tf.clear_button_mode = 'while_editing'
+                        tf.name = key
+                        tf.delegate = self
+                        cell.content_view.add_subview(tf)
+
+                    elif t == 'check':
+                        value = item.get('value', False)
+                        group = item.get('group', None)
+                        if value:
+                            cell.accessory_type = 'checkmark'
+                            cell.text_label.text_color = cell.tint_color
+                        cell.text_label.text = title
+                        if group:
+                            if value:
+                                self.values[group] = key
+                        else:
+                            self.values[key] = value
+                    elif t == 'date' or t == 'datetime' or t == 'time':
+                        value = item.get('value', datetime.datetime.now())
+                        if type(value) == datetime.date:
+                            value = datetime.datetime.combine(value, datetime.time())
+                        if type(value) == datetime.time:
+                            value = datetime.datetime.combine(value, datetime.date.today())
+                        date_format = item.get('format', None)
+                        if not date_format:
+                            if t == 'date':
+                                date_format = '%Y-%m-%d'
+                            elif t == 'time':
+                                date_format = '%H:%M'
+                            else:
+                                date_format = '%Y-%m-%d %H:%M'
+                        item['format'] = date_format
+                        cell.detail_text_label.text = value.strftime(date_format)
+                        self.values[key] = value
+                        cell.text_label.text = title
+                    else:
+                        cell.selectable = False
+                        cell.text_label.text = item.get('title', '')
+
+                    section_cells.append(cell)
+            
+            done_button = ui.ButtonItem(title=done_button_title)
+            done_button.action = self.done_action
+            self.container_view.right_button_items = [done_button]
+        
+        def update_kb_height(self, h):
+            self.view.content_inset = (0, 0, h, 0)
+            self.view.scroll_indicator_insets = (0, 0, h, 0)
+        
+        def tableview_number_of_sections(self, tv):
+            return len(self.cells)
+        
+        def tableview_title_for_header(self, tv, section):
+            return self.sections[section][0]
+
+        def tableview_title_for_footer(self, tv, section):
+            s = self.sections[section]
+            if len(s) > 2:
+                return s[2]
+            return None
+        
+        def tableview_number_of_rows(self, tv, section):
+            return len(self.cells[section])
+        
+        def tableview_did_select(self, tv, section, row):
+            sel_item = self.sections[section][1][row]
+            t = sel_item.get('type', None)
+            if t == 'check':
+                key = sel_item['key']
+                tv.selected_row = -1
+                group = sel_item.get('group', None)
+                cell = self.cells[section][row]
+                if group:
+                    for i, s in enumerate(self.sections):
+                        for j, item in enumerate(s[1]):
+                            if item.get('type', None) == 'check' and item.get('group', None) == group and item is not sel_item:
+                                self.cells[i][j].accessory_type = 'none'
+                                self.cells[i][j].text_label.text_color = None
+                    cell.accessory_type = 'checkmark'
+                    cell.text_label.text_color = cell.tint_color
+                    self.values[group] = key
+                else:
+                    if cell.accessory_type == 'checkmark':
+                        cell.accessory_type = 'none'
+                        cell.text_label.text_color = None
+                        self.values[key] = False
+                    else:
+                        cell.accessory_type = 'checkmark'
+                        self.values[key] = True
+                if self.values['price'] != '' and (self.values.get('category', None) or self.values['newCategory'] != ''):
+                    self.done_action(None)
+            elif t == 'date' or t == 'time' or t == 'datetime':
+                tv.selected_row = -1
+                self.selected_date_key = sel_item['key']
+                self.selected_date_value = self.values.get(self.selected_date_key)
+                self.selected_date_cell = self.cells[section][row]
+                self.selected_date_format = sel_item['format']
+                self.selected_date_type = t
+                if t == 'date':
+                    mode = ui.DATE_PICKER_MODE_DATE
+                elif t == 'time':
+                    mode = ui.DATE_PICKER_MODE_TIME
+                else:
+                    mode = ui.DATE_PICKER_MODE_DATE_AND_TIME
+                self.show_datepicker(mode)
+
+        def tableview_can_delete(self, tv, section, row):
+            '''if self.sections[section][0] == 'Category?':
+                return True
+            else:
+                return False'''
+            return False
+
+        def tableview_can_move(self, tv, section, row):
+            '''if self.sections[section][0] == 'Category?':
+                return True
+            else:
+                return False'''
+            return False
+
+        def tableview_move_row(self, tv, from_section, from_row, to_section, to_row):
+            '''self.cells[from_section][from_row], self.cells[to_section][to_row] = self.cells[to_section][to_row], self.cells[from_section][from_row]
+            self.categoriesWasChanged = True
+            self.newCategories = []
+            for i in self.cells[from_section]:
+                self.newCategories.append(i.text_label.text)'''
+            pass
+                    
+        def tableview_delete(self, tv, section, row):
+            '''del self.cells[section][row]
+            tv.delete_rows([(row, section), ])
+            self.newCategories = []
+            for i in self.cells[section]:
+                self.newCategories.append(i.text_label.text)'''
+            pass
+            
+        def show_datepicker(self, mode):
+            ui.end_editing()
+            self.shield_view = ui.View()
+            self.shield_view.flex = 'WH'
+            self.shield_view.frame = (0, 0, self.view.width, self.view.height)
+            
+            self.dismiss_datepicker_button = ui.Button()
+            self.dismiss_datepicker_button.flex = 'WH'
+            self.dismiss_datepicker_button.frame = (0, 0, self.view.width, self.view.height)
+            self.dismiss_datepicker_button.background_color = (0, 0, 0, 0.5)
+            self.dismiss_datepicker_button.action = self.dismiss_datepicker
+            self.dismiss_datepicker_button.alpha = 0.0
+            self.shield_view.add_subview(self.dismiss_datepicker_button)
+
+            self.date_picker = ui.DatePicker()
+            self.date_picker.date = self.selected_date_value
+            self.date_picker.background_color = 'white'
+            self.date_picker.mode = mode
+            self.date_picker.frame = (0, self.shield_view.height - self.date_picker.height, self.shield_view.width, self.date_picker.height)
+            self.date_picker.flex = 'TW'
+            self.date_picker.transform = ui.Transform.translation(0, self.date_picker.height)
+            self.shield_view.add_subview(self.date_picker)
+
+            self.container_view.add_subview(self.shield_view)
+            
+            def fade_in():
+                self.dismiss_datepicker_button.alpha = 1.0
+                self.date_picker.transform = ui.Transform.translation(0, 0)
+            ui.animate(fade_in, 0.3)
+
+        def dismiss_datepicker(self, sender):
+            value = self.date_picker.date
+            
+            if self.selected_date_type == 'date':
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+            elif self.selected_date_type == 'time':
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+            else:
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+
+            self.values[self.selected_date_key] = value
+            
+            def fade_out():
+                self.dismiss_datepicker_button.alpha = 0.0
+                self.date_picker.transform = ui.Transform.translation(0, self.date_picker.height)
+            def remove():
+                self.container_view.remove_subview(self.shield_view)
+                self.shield_view = None
+            ui.animate(fade_out, 0.3, completion=remove)
+        
+        def tableview_cell_for_row(self, tv, section, row):
+            return self.cells[section][row]
+        
+        def textfield_did_change(self, tf):
+            self.values[tf.name] = tf.text
+
+        def textfield_did_end_editing(self, tf):
+            pass
+
+        def textfield_should_return(self, tf):
+            tf.end_editing()
+            try:
+                self.tfSteps.remove(tf.name) #пытаемся удалить tf из списка tfSteps, если он там есть - удаляем, если нет - ничего не делаем
+            except:
+                return #если tf не в списке tfSteps - не делаем ничего
+            if len(self.tfSteps) == 0: #прошагали по всем tf из tfSteps - скроллим на выбор категории
+                def scroll():
+                        self.view.content_offset = (self.offset)
+                ui.animate(scroll)
+            else:
+                a = self.tfSteps[0] #имя следующего tf, а так же и имя TableViewCell
+                b = self.view[a] #TableViewCell, обращаемся к subviews по имени. superView - self.view, то есть TableView
+                c = b.content_view[a] #textField, обращаемся к subViews по имени. superView - TableViewCell
+                c.begin_editing()
+
+        def switch_action(self, sender):
+            self.values[sender.name] = sender.value
+        
+        def done_action(self, sender):
+            try:
+                self.values['price'] = float(self.values['price'])
+                if self.values.get('category', None) or self.values['newCategory'] != '':
+                    if self.shield_view:
+                        self.dismiss_datepicker(None)
+                    else:
+                        ui.end_editing()
+                        self.was_canceled = False
+                        self.container_view.close()
+            except:
+                pass
+
+    class FormContainerView(ui.View):
+            #from dialogs
+            def __init__(self):
+                self.delegate = None
+                
+            def keyboard_frame_will_change(self, f):
+                r = ui.convert_rect(f, to_view=self)
+                if r[3] > 0:
+                    kbh = self.height - r[1]
+                else:
+                    kbh = 0
+                if self.delegate:
+                    self.delegate.update_kb_height(kbh)
+
+    class SettingsDialogController(TransactionDialogController):
+        #from dialogs
+        def __init__(self, title, sections, done_button_title='Done'):
+            self.was_canceled = True
+            self.shield_view = None
+            self.values = {}
+            self.container_view = GUI.FormContainerView()
+            self.container_view.frame = (0, 0, 500, 500)
+            self.container_view.delegate = self
+            self.view = ui.TableView('grouped')
+            self.view.flex = 'WH'
+            self.container_view.add_subview(self.view)
+            self.container_view.name = title
+            self.view.frame = (0, 0, 500, 500)
+            self.view.data_source = self
+            self.view.delegate = self
+            self.cells = []
+
+            self.view.editing = True
+            self.view.allows_selection_during_editing = True
+            self.newCategories = []
+
+            self.sections = sections
+                        
+            self.createCells()
+
+            done_button = ui.ButtonItem(title=done_button_title)
+            done_button.action = self.done_action
+            self.container_view.right_button_items = [done_button]
+
+        def createCells(self):
+            self.cells = [] #очищаю список, т. к. данная функция вызывается не только при ините, но и при добавлении новой категории
+            for section in self.sections:
+                section_cells = []
+                self.cells.append(section_cells)
+                items = section[1]
+                for i, item in enumerate(items):
+                    cell = ui.TableViewCell('value1')
+                    cell.name = item.get('key', None) #добавляем имя для ячейки, для дальнейшей идентификации
+                    icon = item.get('icon', None)
+                    tint_color = item.get('tint_color', None)
+                    if tint_color:
+                        cell.tint_color = tint_color
+                    if icon:
+                        if isinstance(icon, str):
+                            icon = ui.Image.named(icon)
+                        if tint_color:
+                            cell.image_view.image = icon.with_rendering_mode(ui.RENDERING_MODE_TEMPLATE)
+                        else:
+                            cell.image_view.image = icon
+                        
+                    title_color = item.get('title_color', None)
+                    if title_color:
+                        cell.text_label.text_color = title_color
+                    
+                    t = item.get('type', None)
+                    key = item.get('key', item.get('title', str(i)))
+                    item['key'] = key
+                    title = item.get('title', '')
+                    if t == 'switch':
+                        value = item.get('value', False)
+                        self.values[key] = value
+                        cell.text_label.text = title
+                        cell.selectable = False
+                        switch = ui.Switch()
+                        w, h = cell.content_view.width, cell.content_view.height
+                        switch.center = (w - switch.width/2 - 10, h/2)
+                        switch.flex = 'TBL'
+                        switch.value = value
+                        switch.name = key
+                        switch.action = self.switch_action
+                        if tint_color:
+                            switch.tint_color = tint_color
+                        cell.content_view.add_subview(switch)
+                    elif t == 'text' or t == 'url' or t == 'email' or t == 'password' or t == 'number':
+                        value = item.get('value', '')
+                        self.values[key] = value
+                        placeholder = item.get('placeholder', '')
+                        cell.selectable = False
+                        cell.text_label.text = title
+                        label_width = ui.measure_string(title, font=cell.text_label.font)[0]
+                        if cell.image_view.image:
+                            label_width += min(64, cell.image_view.image.size[0] + 16)
+                        cell_width, cell_height = cell.content_view.width, cell.content_view.height
+                        tf = ui.TextField()
+                        tf_width = max(40, cell_width - label_width - 32)
+                        tf.frame = (cell_width - tf_width - 8, 1, tf_width, cell_height-2)
+                        tf.bordered = False
+                        tf.placeholder = placeholder
+                        tf.flex = 'W'
+                        tf.text = value
+                        tf.text_color = '#337097'
+                        if t == 'text':
+                            tf.autocorrection_type = item.get('autocorrection', None)
+                            tf.autocapitalization_type = item.get('autocapitalization', ui.AUTOCAPITALIZE_SENTENCES)
+                            tf.spellchecking_type = item.get('spellchecking', None)
+                        if t == 'url':
+                            tf.keyboard_type = ui.KEYBOARD_URL
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'email':
+                            tf.keyboard_type = ui.KEYBOARD_EMAIL
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'number':
+                            tf.keyboard_type = ui.KEYBOARD_NUMBERS
+                            tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                            tf.autocorrection_type = False
+                            tf.spellchecking_type = False
+                        elif t == 'password':
+                            tf.secure = True
+                        
+                        tf.clear_button_mode = 'while_editing'
+                        tf.name = key
+                        tf.delegate = self
+                        cell.content_view.add_subview(tf)
+
+                    elif t == 'check':
+                        value = item.get('value', False)
+                        group = item.get('group', None)
+                        if value:
+                            cell.accessory_type = 'checkmark'
+                            cell.text_label.text_color = cell.tint_color
+                        cell.text_label.text = title
+                        if group:
+                            if value:
+                                self.values[group] = key
+                        else:
+                            self.values[key] = value
+                    elif t == 'date' or t == 'datetime' or t == 'time':
+                        value = item.get('value', datetime.datetime.now())
+                        if type(value) == datetime.date:
+                            value = datetime.datetime.combine(value, datetime.time())
+                        if type(value) == datetime.time:
+                            value = datetime.datetime.combine(value, datetime.date.today())
+                        date_format = item.get('format', None)
+                        if not date_format:
+                            if t == 'date':
+                                date_format = '%Y-%m-%d'
+                            elif t == 'time':
+                                date_format = '%H:%M'
+                            else:
+                                date_format = '%Y-%m-%d %H:%M'
+                        item['format'] = date_format
+                        cell.detail_text_label.text = value.strftime(date_format)
+                        self.values[key] = value
+                        cell.text_label.text = title
+                    else:
+                        cell.selectable = False
+                        cell.text_label.text = item.get('title', '')
+
+                    section_cells.append(cell)
+
+        def addCell(self, item):
+            cell = ui.TableViewCell('value1')
+            cell.name = item.get('key', None) #добавляем имя для ячейки, для дальнейшей идентификации
+            icon = item.get('icon', None)
+            tint_color = item.get('tint_color', None)
+            if tint_color:
+                cell.tint_color = tint_color
+            if icon:
+                if isinstance(icon, str):
+                    icon = ui.Image.named(icon)
+                if tint_color:
+                    cell.image_view.image = icon.with_rendering_mode(ui.RENDERING_MODE_TEMPLATE)
+                else:
+                    cell.image_view.image = icon
+                
+            title_color = item.get('title_color', None)
+            if title_color:
+                cell.text_label.text_color = title_color
+            
+            t = item.get('type', None)
+            key = item.get('key', item.get('title', None))
+            item['key'] = key
+            title = item.get('title', '')
+            value = item.get('value', '')
+            self.values[key] = value
+            placeholder = item.get('placeholder', '')
+            cell.selectable = False
+            cell.text_label.text = title
+            label_width = ui.measure_string(title, font=cell.text_label.font)[0]
+            if cell.image_view.image:
+                label_width += min(64, cell.image_view.image.size[0] + 16)
+            cell_width, cell_height = cell.content_view.width, cell.content_view.height
+            tf = ui.TextField()
+            tf_width = max(40, cell_width - label_width - 32)
+            tf.frame = (cell_width - tf_width - 8, 1, tf_width, cell_height-2)
+            tf.bordered = False
+            tf.placeholder = placeholder
+            tf.flex = 'W'
+            tf.text = value
+            tf.text_color = '#337097'
+            if t == 'text':
+                tf.autocorrection_type = item.get('autocorrection', None)
+                tf.autocapitalization_type = item.get('autocapitalization', ui.AUTOCAPITALIZE_SENTENCES)
+                tf.spellchecking_type = item.get('spellchecking', None)
+            if t == 'url':
+                tf.keyboard_type = ui.KEYBOARD_URL
+                tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                tf.autocorrection_type = False
+                tf.spellchecking_type = False
+            elif t == 'email':
+                tf.keyboard_type = ui.KEYBOARD_EMAIL
+                tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                tf.autocorrection_type = False
+                tf.spellchecking_type = False
+            elif t == 'number':
+                tf.keyboard_type = ui.KEYBOARD_NUMBERS
+                tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
+                tf.autocorrection_type = False
+                tf.spellchecking_type = False
+            elif t == 'password':
+                tf.secure = True
+            
+            tf.clear_button_mode = 'while_editing'
+            tf.name = key
+            tf.delegate = self
+            cell.content_view.add_subview(tf)
+
+            self.cells[3].append(cell) #3 - Categories section
+
+        def update_kb_height(self, h):
+            self.view.content_inset = (0, 0, h, 0)
+            self.view.scroll_indicator_insets = (0, 0, h, 0)
+        
+        def tableview_number_of_sections(self, tv):
+            return len(self.cells)
+        
+        def tableview_title_for_header(self, tv, section):
+            return self.sections[section][0]
+
+        def tableview_title_for_footer(self, tv, section):
+            s = self.sections[section]
+            if len(s) > 2:
+                return s[2]
+            return None
+        
+        def tableview_number_of_rows(self, tv, section):
+            return len(self.cells[section])
+        
+        def tableview_did_select(self, tv, section, row):
+            sel_item = self.sections[section][1][row]
+            t = sel_item.get('type', None)
+            if t == 'check':
+                key = sel_item['key']
+                tv.selected_row = -1
+                group = sel_item.get('group', None)
+                cell = self.cells[section][row]
+                if group:
+                    for i, s in enumerate(self.sections):
+                        for j, item in enumerate(s[1]):
+                            if item.get('type', None) == 'check' and item.get('group', None) == group and item is not sel_item:
+                                self.cells[i][j].accessory_type = 'none'
+                                self.cells[i][j].text_label.text_color = None
+                    cell.accessory_type = 'checkmark'
+                    cell.text_label.text_color = cell.tint_color
+                    self.values[group] = key
+                else:
+                    if cell.accessory_type == 'checkmark':
+                        cell.accessory_type = 'none'
+                        cell.text_label.text_color = None
+                        self.values[key] = False
+                    else:
+                        cell.accessory_type = 'checkmark'
+                        self.values[key] = True
+            elif t == 'date' or t == 'time' or t == 'datetime':
+                tv.selected_row = -1
+                self.selected_date_key = sel_item['key']
+                self.selected_date_value = self.values.get(self.selected_date_key)
+                self.selected_date_cell = self.cells[section][row]
+                self.selected_date_format = sel_item['format']
+                self.selected_date_type = t
+                if t == 'date':
+                    mode = ui.DATE_PICKER_MODE_DATE
+                elif t == 'time':
+                    mode = ui.DATE_PICKER_MODE_TIME
+                else:
+                    mode = ui.DATE_PICKER_MODE_DATE_AND_TIME
+                self.show_datepicker(mode)
+
+        def tableview_can_delete(self, tv, section, row):
+            if self.sections[section][0] == 'Categories:':
+                return True
+            else:
+                return False
+
+        def tableview_can_move(self, tv, section, row):
+            if self.sections[section][0] == 'Categories:':
+                return True
+            else:
+                return False
+
+        def tableview_move_row(self, tv, from_section, from_row, to_section, to_row):
+            if self.sections[from_section][0] == 'Categories:' and self.sections[to_section][0] == 'Categories:':
+                if from_row == to_row:
+                    return
+                moved_item = self.cells[from_section][from_row]
+                del self.cells[from_section][from_row]
+                self.cells[from_section][to_row:to_row] = [moved_item]
+                newCategories = []
+                for i in self.cells[from_section]:
+                    newCategories.append(i.text_label.text)
+                self.values['newCategories'] = newCategories
+            else:
+                self.container_view.close()
+                    
+        def tableview_delete(self, tv, section, row):
+            del self.cells[section][row]
+            tv.delete_rows([(row, section), ])
+            newCategories = []
+            for i in self.cells[section]:
+                newCategories.append(i.text_label.text)
+            self.values['newCategories'] = newCategories
+            
+        def show_datepicker(self, mode):
+            ui.end_editing()
+            self.shield_view = ui.View()
+            self.shield_view.flex = 'WH'
+            self.shield_view.frame = (0, 0, self.view.width, self.view.height)
+            
+            self.dismiss_datepicker_button = ui.Button()
+            self.dismiss_datepicker_button.flex = 'WH'
+            self.dismiss_datepicker_button.frame = (0, 0, self.view.width, self.view.height)
+            self.dismiss_datepicker_button.background_color = (0, 0, 0, 0.5)
+            self.dismiss_datepicker_button.action = self.dismiss_datepicker
+            self.dismiss_datepicker_button.alpha = 0.0
+            self.shield_view.add_subview(self.dismiss_datepicker_button)
+
+            self.date_picker = ui.DatePicker()
+            self.date_picker.date = self.selected_date_value
+            self.date_picker.background_color = 'white'
+            self.date_picker.mode = mode
+            self.date_picker.frame = (0, self.shield_view.height - self.date_picker.height, self.shield_view.width, self.date_picker.height)
+            self.date_picker.flex = 'TW'
+            self.date_picker.transform = ui.Transform.translation(0, self.date_picker.height)
+            self.shield_view.add_subview(self.date_picker)
+
+            self.container_view.add_subview(self.shield_view)
+            
+            def fade_in():
+                self.dismiss_datepicker_button.alpha = 1.0
+                self.date_picker.transform = ui.Transform.translation(0, 0)
+            ui.animate(fade_in, 0.3)
+
+        def dismiss_datepicker(self, sender):
+            value = self.date_picker.date
+            
+            if self.selected_date_type == 'date':
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+            elif self.selected_date_type == 'time':
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+            else:
+                self.selected_date_cell.detail_text_label.text = value.strftime(self.selected_date_format)
+
+            self.values[self.selected_date_key] = value
+            
+            def fade_out():
+                self.dismiss_datepicker_button.alpha = 0.0
+                self.date_picker.transform = ui.Transform.translation(0, self.date_picker.height)
+            def remove():
+                self.container_view.remove_subview(self.shield_view)
+                self.shield_view = None
+            ui.animate(fade_out, 0.3, completion=remove)
+        
+        def tableview_cell_for_row(self, tv, section, row):
+            return self.cells[section][row]
+        
+        def textfield_did_change(self, tf):
+            self.values[tf.name] = tf.text
+
+        def textfield_did_end_editing(self, tf):
+            pass
+
+        def textfield_should_return(self, tf):
+            tf.end_editing()
+            if tf.name == 'newCategory' and tf.text != '':
+                a = {'title':tf.text, 'group':'categories'}
+                self.addCell(a)
+                self.view.reload()
+                newCategories = []
+                for i in self.cells[3]:
+                    newCategories.append(i.text_label.text)
+                self.values['newCategories'] = newCategories
+                
+        def switch_action(self, sender):
+            self.values[sender.name] = sender.value
+        
+        def done_action(self, sender):
+            if self.shield_view:
+                self.dismiss_datepicker(None)
+            else:
+                ui.end_editing()
+                self.was_canceled = False
+                self.container_view.close()
 
     class DbListDataSource():
         #определяем свой формат данных, пилим свои методы, т. к. в ui.ListDataSource нет поддержки секций для табицы.
@@ -781,23 +1233,8 @@ class GUI():
             return cell
 
     class MyView(ui.View):
-        def __init__(self, keyboardFrameChangedAction, layoutChangedAction, name, flex, background_color):
-            self.keyboardFrame = (0.00, 0.00, 0.00, 0.00)
-            self.keyboardFrameChangedAction = keyboardFrameChangedAction
-            self.layoutChangedAction = layoutChangedAction
-            self.name = name
-            self.flex = flex
-            self.background_color = background_color
-
-        def keyboard_frame_will_change(self, frame):
-            self.keyboardFrame = ui.convert_rect(frame, to_view=self)
-            self.keyboardFrameChangedAction()
-
         def will_close(self):
             pass
-        
-        def layout(self):
-            self.layoutChangedAction()
 
     class MyTextFieldDelegate():
         def __init__(self, textFieldDidChangedAction, textFieldShouldReturnAction):
@@ -819,42 +1256,42 @@ class Model(): #sqlite3 data access layer
     def createDb(self):
         conn = sqlite3.connect(DB)
         cur = conn.cursor()
-        
+
         cur.execute('''CREATE TABLE IF NOT EXISTS purchases(
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    category TEXT,
+                    price REAL,
+                    date TEXT,
+                    note TEXT)''')
+
+        cur.execute('''CREATE TABLE IF NOT EXISTS settings(
                             id INTEGER PRIMARY KEY,
-                            name TEXT,
-                            category TEXT,
-                            price REAL,
-                            date TEXT,
-                            note TEXT)''')
+                            categories TEXT,
+                            initialMode TEXT,
+                            currencySymbol TEXT,
+                            localDateFormat TEXT)''')
 
-        cur.execute('''CREATE TABLE IF NOT EXISTS categories(
-                                    id INTEGER PRIMARY KEY,
-                                    name TEXT)''')
+        cur.execute('''INSERT INTO settings (id,
+                        categories,
+                        initialMode,
+                        currencySymbol,
+                        localDateFormat) VALUES(?, ?, ?, ?, ?)''', (DEFAULTSETTINGSID,
+                            DEFAULTCATEGORIES,
+                            INITIALMODE,
+                            CURRENCYSYMBOL,
+                            'Europe'))
 
-        testDataCategories = [('Продукты', ),
-                    ('Хозяйство', ),
-                    ('Бытовая химия', ),
-                    ('Анка', ),
-                    ('Машина', ),
-                    ('Фастфуд', ),
-                    ('Бензин', ),
-                    ('Долги', ),
-                    ('Другое', ),
-                    ('Жилье', ),
-                    ('Здоровье', ),
-                    ('Канцелярия', ),
-                    ('Обед на работе', ),
-                    ('Одежда', ),
-                    ('Подарки', ),
-                    ('Проезд', ),
-                    ('Развлечения', ),
-                    ('Саша', ),
-                    ('Связь', ),
-                    ('Списание', ),
-                    ('Стрижка', )]
-
-        cur.executemany('INSERT INTO categories (name) VALUES(?)', testDataCategories)
+        cur.execute('''INSERT INTO settings (id,
+                        categories,
+                        initialMode,
+                        currencySymbol,
+                        localDateFormat) VALUES(?, ?, ?, ?, ?)''', (USERSETTINGSID,
+                            DEFAULTCATEGORIES,
+                            INITIALMODE,
+                            CURRENCYSYMBOL,
+                            'Europe'))
+        
         conn.commit()
         conn.close()
 
@@ -928,14 +1365,6 @@ class Model(): #sqlite3 data access layer
         connection.close()
         return transactions
 
-    def getCategories(self):
-        connection = sqlite3.connect(DB)
-        connection.row_factory = lambda cursor, row: row[0] #эта магия позволяет возвращать из db список, а не список кортежей, то есть возвращает нулевой элемент каждого кортежа
-        db = connection.cursor()
-        categories = db.execute('SELECT name FROM categories ORDER BY id').fetchall()
-        connection.close()
-        return categories
-
     def getTransaction(self, rowId):
         connection = sqlite3.connect(DB)
         db = connection.cursor()
@@ -964,12 +1393,66 @@ class Model(): #sqlite3 data access layer
         connection.commit()
         connection.close()
 
+    def addCategory(self, newCategory):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        categories = db.execute('SELECT categories FROM settings WHERE id=?', (USERSETTINGSID, )).fetchone()[0]
+        newCategories = categories+'\t'+newCategory
+        db.execute('UPDATE settings SET categories=? WHERE id=?', (newCategories, USERSETTINGSID))
+        connection.commit()
+        connection.close()
+
+    def getSettings(self, mode='user'):
+        if mode == 'user': #user settings
+            settingsId = 1
+        elif mode == 'default': #default settings
+            settingsId = 0
+        else:
+            raise ValueError('Несоответствующее значение')
+
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        settings = db.execute('''SELECT categories as categories,
+            initialMode as initialMode,
+            currencySymbol as currencySymbol,
+            localDateFormat as localDateFormat FROM settings WHERE id =?''', (settingsId, )).fetchone()
+        connection.close()
+        return settings
+
+    def resetToDefaultSettings(self):
+        a = self.getSettings(mode='default')
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        db.execute('''UPDATE settings SET initialMode=?,
+            currencySymbol=?,
+            localDateFormat=? WHERE id=?''', (a['initialMode'],
+                a['currencySymbol'],
+                a['localDateFormat'],
+                USERSETTINGSID))
+        connection.commit()
+        connection.close()
+
+    def updateSettings(self, settings):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        db.execute('''UPDATE settings SET categories=?,
+            initialMode=?,
+            currencySymbol=?,
+            localDateFormat=? WHERE id=?''', (settings['newCategories'],
+                settings['initialMode'],
+                settings['currencySymbol'],
+                settings['localDateFormat'],
+                USERSETTINGSID))
+        connection.commit()
+        connection.close()
+
 class Controller():
     def __init__(self):
         self.model = Model(self)
         self.gui = GUI(self)
+        self.settings = self.getSettings() #словарь с настройками
 
-        self.mode = INITIALMODE
         self.date = self.getNow() #datetime object
         self.fromDate = None #datetime object
         self.toDate = None #datetime object
@@ -977,41 +1460,47 @@ class Controller():
         self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
 
     def periodButtonAction(self, result):
-        if result[0] == 'Day':
-            self.mode = 'D'
-        elif result[0] == 'Month':
-            self.mode = 'M'
-        elif result[0] == 'Year':
-            self.mode = 'Y'
-        elif result[0] == 'Period':
-            self.mode = 'P'
-            self.fromDate = result[1]
-            self.toDate = result[2]
-        elif result[0] == 'All time':
-            self.mode = 'All'
-        else:
-            raise ValueError('Несоответствующее значение')
+        self.settings['mode'] = result['mode']
+        self.fromDate = result.get('fromDate', None)
+        self.toDate = result.get('toDate', None)
         self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())     
 
     def calendarButtonAction(self, result):
         self.date = result
         self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
 
-    def settingsButtonAction(self):
-        print('settingsButtonAction')
+    def settingsButtonAction(self, settings):
+        if settings['reset'] == True:
+            self.model.resetToDefaultSettings()
+            self.updateSettings()
+            self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
+        else:
+            self.settings['initialMode'] = settings['initialMode']
+            self.settings['localDateFormat'] = settings['localDateFormat']
+            self.settings['currencySymbol'] = settings['currencySymbol']
+            if settings.get('newCategories', None):
+                self.settings['newCategories'] = '\t'.join(settings['newCategories'])
+            else:
+                self.settings['newCategories'] = '\t'.join(self.settings['categories'])
+            self.model.updateSettings(self.settings)
+            self.updateSettings()
+            self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
 
     def searchButtonAction(self):
-        print('searchButtonAction')
+        pass
 
-    def addButtonAction(self, result):
-        if result['id'] and result['category'] and result['price']: #режим редактирования транзакции, т. к. есть id, будем ее перезаписывать по этому id
-            self.model.updateTransaction(result)
-        elif result['category'] and result['price']: #режим добавления транзакции, т. к. нет id
-            if not result['date']:
-                result['date'] = str(self.getNow())
-            if not result['note']:
-                result['note'] = ''
-            self.model.addTransaction(result)
+    def addButtonAction(self, transaction, transactionId=None):
+        if transaction['newCategory'] != '': #у нас есть новая категория
+            self.model.addCategory(transaction['newCategory'])
+            transaction['category'] = transaction['newCategory']
+            self.updateSettings()
+
+        transaction['date'] = transaction['date'].strftime('%Y-%m-%d %H:%M:%S')
+        if transactionId and transaction['category'] and transaction['price']: #режим редактирования транзакции, т. к. есть id, будем ее перезаписывать по этому id
+            transaction['id'] = transactionId
+            self.model.updateTransaction(transaction)
+        elif transaction['category'] != '' and transaction['price'] != '': #режим добавления транзакции, т. к. нет id
+            self.model.addTransaction(transaction)
         else:
             raise ValueError('В транзакции отсутствует обязательное(ые) поле(я). Category и/или Price')
 
@@ -1036,28 +1525,13 @@ class Controller():
 
         showTransaction(title, fullRes)
 
-    def datePickerDoneButtonAction(self):
-        pass
-
-    def textFieldEnterButtonAction(self):
-        pass
-
-    def textFieldDoneButtonAction(self):
-        pass
-
-    def textFieldelCalendarButtonAction(self):
-        pass
-
-    def textFieldCancelButtonAction(self):
-        pass
-
     def floatToPrice(self, fPrice, mode='rough'):
         if fPrice == None:
             return '0 ₽'
         elif mode == 'rough':
-            return (format(fPrice, ',.0f').replace(',', '  ')+CURRENCYSYMBOL)
+            return (format(fPrice, ',.0f').replace(',', '  ')+ ' '+self.settings['currencySymbol'])
         elif mode == 'precisely':
-            return (format(fPrice, ',.2f').replace(',', '  ')+CURRENCYSYMBOL)
+            return (format(fPrice, ',.2f').replace(',', '  ')+' '+self.settings['currencySymbol'])
         else:
             raise ValueError('mode: несоответствующее значение')
 
@@ -1071,46 +1545,43 @@ class Controller():
         now = self.model.getNow()
         return datetime.datetime.strptime(now, '%Y-%m-%d %H:%M:%S')
 
-    def getTheme(self):
-        return ui.get_ui_style()
-
     def getNameForMainTable(self):
-        if self.mode == 'D':
+        if self.settings['mode'] == 'Day':
             period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
             total = self.model.getTotalPriceFromPeriod(period)
-            return (self.date.strftime(LOCALDATEFORMATDAY)+' ('+self.floatToPrice(total)+')')
-        elif self.mode == 'M':
+            return (self.date.strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['day'])+' ('+self.floatToPrice(total)+')')
+        elif self.settings['mode'] == 'Month':
             period = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'))
             total = self.model.getTotalPriceFromPeriod(period)
-            return (self.date.strftime(LOCALDATEFORMATMONTH)+' ('+self.floatToPrice(total)+')')
-        elif self.mode == 'Y':
+            return (self.date.strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['month'])+' ('+self.floatToPrice(total)+')')
+        elif self.settings['mode'] == 'Year':
             period = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'))
             total = self.model.getTotalPriceFromPeriod(period)
-            return (self.date.strftime(LOCALDATEFORMATYEAR)+' ('+self.floatToPrice(total)+')')
-        elif self.mode == 'P':
+            return (self.date.strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['year'])+' ('+self.floatToPrice(total)+')')
+        elif self.settings['mode'] == 'Custom period':
             period = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
             total = self.model.getTotalPriceFromPeriod(period)
-            return (self.fromDate.strftime(LOCALDATEFORMATDAY)+' - '+self.toDate.strftime(LOCALDATEFORMATDAY)+' ('+self.floatToPrice(total)+')')
-        elif self.mode == 'All':
+            return (self.fromDate.strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['short'])+' - '+self.toDate.strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['short'])+' ('+self.floatToPrice(total)+')')
+        elif self.settings['mode'] == 'All time':
             total = self.model.getTotalPriceFromAllTime()
             return ('All'+' ('+self.floatToPrice(total)+')')
         else:
             raise ValueError('Несоответствующее значение')
 
     def getItemsForMainTable(self):
-        if self.mode == 'D':
+        if self.settings['mode'] == 'Day':
             period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
             getTransaction = self.model.getTransactionsFromPeriod
-        elif self.mode == 'M':
+        elif self.settings['mode'] == 'Month':
             period = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'))
             getTransaction = self.model.getTransactionsFromPeriod
-        elif self.mode == 'Y':
+        elif self.settings['mode'] == 'Year':
             period = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'))
             getTransaction = self.model.getTransactionsFromPeriod
-        elif self.mode == 'P':
+        elif self.settings['mode'] == 'Custom period':
             period = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
             getTransaction = self.model.getTransactionsFromPeriod
-        elif self.mode == 'All':
+        elif self.settings['mode'] == 'All time':
             period = None
             getTransaction = self.model.getTransactionsFromAllTime
         else:
@@ -1127,15 +1598,12 @@ class Controller():
             for i in range(row['numOfTransactions']):
                 #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
                 r = {'rowId':row['ids'].split('\t')[i],
-                    'rowDate':datetime.datetime.strptime(row['dates'].split('\t')[i], DEFAULTDATEFORMATDAY).strftime(LOCALDATEFORMATDAY), #меняем дату под локаль
+                    'rowDate':datetime.datetime.strptime(row['dates'].split('\t')[i], DEFAULTFORMATDAY).strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['day']), #меняем дату под локаль
                     'rowName':row['names'].split('\t')[i],
                     'rowSum':self.floatToPrice(float(row['prices'].split('\t')[i]))}
                 string['rows'].append(r)
             result.append(string)
         return result
-
-    def getCategories(self):
-        return self.model.getCategories()
 
     def getTransaction(self, rowId):
         rawData = self.model.getTransaction(rowId)
@@ -1144,14 +1612,22 @@ class Controller():
 
     def addFastTransaction(self):
         #adding transaction from iOS shortcuts
-        self.gui._addButtonAction(None)
+        self.gui.addButtonAction(None)
 
-    def vibrate(self):
-        c = ctypes.CDLL(None)
-        p = c.AudioServicesPlaySystemSound
-        p.restype, p.argtypes = None, [ctypes.c_int32]
-        vibrate_id = 0x00000fff
-        p(vibrate_id)
+    def getSettings(self, mode='user'):
+        a = self.model.getSettings(mode)
+        settings = {}
+        
+        settings['categories'] = a['categories'].split('\t')
+        settings['mode'] = a['initialMode']
+        settings['initialMode'] = a['initialMode']
+        settings['currencySymbol'] = a['currencySymbol']
+        settings['localDateFormat'] = a['localDateFormat']
+        
+        return settings
+
+    def updateSettings(self):
+        self.settings = self.getSettings()
 
 controller = Controller()
 if len(sys.argv) > 1:
