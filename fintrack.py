@@ -1,7 +1,8 @@
-import sys, ui, dialogs, os, sqlite3, datetime, console, clipboard, collections
+import sys, ui, dialogs, os, sqlite3, datetime, console, clipboard, collections, re
 
+#DB = '/private/var/mobile/Library/Mobile Documents/iCloud~com~omz-software~Pythonista3/Documents/FinTrack/fintrack_test.db' #sqlite3 db
 DB = '/private/var/mobile/Library/Mobile Documents/iCloud~com~omz-software~Pythonista3/Documents/FinTrack/fintrack.db' #sqlite3 db
-DEFAULTFORMATDAY = '%Y-%m-%d' #defaul date format from sqlite3
+DEFAULTFORMATDAY = '%Y-%m-%d %H:%M:%S' #defaul date format from sqlite3
 TABLECELLLENGHT = 30 #количесвто символов, которое помещается в одной строке таблицы (когда категория открыта), зависит от размера шрифта SMALLFONT
 SMALLFONT = ('<system>', 14) #размер шрифта в таблице в открытой категории (он меньше чем шрифт самой категории)
 
@@ -13,6 +14,8 @@ LOCALDATEFORMAT = {'Europe':{'day':'%d.%m.%Y', 'month':'%B %Y', 'year':'%Y', 'sh
                     'USA':{'day':'%m/%d/%Y', 'month':'%B %Y', 'year':'%Y', 'short':'%m/%d/%y'}}
 DEFAULTSETTINGSID = 0
 USERSETTINGSID = 1
+
+TFHEIGTH = 36
 
 CALENDAR = 'calendar36.png'
 PERIOD = 'period36.png'
@@ -41,28 +44,78 @@ class GUI():
         self.addButton = ui.Button(image=ui.Image.named(ADD),
             action=self.addButtonAction,
             alpha=0.0)
-        self.mainTableDataSource = self.DbListDataSource(items=None,
-            action=self.mainTableRowSelectedAction,
-            editAction=self.mainTableRowDeletedAction,
-            accessoryAction=self.mainTableRowAccessoryTapedAction)
-        self.mainTable = ui.TableView(data_source=self.mainTableDataSource,
-            delegate=self.mainTableDataSource,
-            editing = False,
+
+        self.categoriesTableDs = self.TransactionsListDataSource(items=None,
+            controller=self.controller,
+            action=self.categoriesTableRowSelectedAction)
+        self.transactionsTableDs = self.TransactionsListDataSource(items=None,
+            controller=self.controller,
+            action=self.transactionsTableRowSelectedAction,
+            editAction=self.transactionsTableRowDeletedAction,
+            accessoryAction=self.transactionsTableAccessoryAction,
+            deleteEnabled=True,
+            titleEnabled=True,
+            footerEnabled=True,
+            font=SMALLFONT)
+        self.searchTableDs = self.TransactionsListDataSource(items=None,
+            controller=controller,
+            action=self.searchTableRowSelectedAction,
+            editAction=self.searchTableRowDeletedAction,
+            accessoryAction=self.searchTableAccessoryAction,
+            deleteEnabled=True,
+            titleEnabled=True,
+            footerEnabled=True,
+            font=SMALLFONT)
+        
+        self.categoriesTable = ui.TableView(data_source=self.categoriesTableDs,
+            delegate=self.categoriesTableDs,
+            name = 'categoriesTable',
+            editing=False,
             alpha=0.0)
+        self.transactionsTable = ui.TableView(data_source=self.transactionsTableDs,
+            delegate=self.transactionsTableDs,
+            name = 'transactionsTable',
+            editing=False)
+        self.searchTable = ui.TableView(data_source=self.searchTableDs,
+            delegate=self.searchTableDs,
+            name='searchTable',
+            editing=False,
+            flex='WH')
 
-        self.view = self.MyView(name='',
-            flex='WH',
+        self.searchTf = ui.TextField(delegate=self,
+            autocorrection_type=False,
+            autocapitalization_type=ui.AUTOCAPITALIZE_NONE,
+            placeholder='🔍Search, 3 symbols min',
+            height=TFHEIGTH,
+            border_color='black',
+            border_width=2,
+            corner_radius=5,
+            flex='W')
+
+        self.searchView = self.MyView(flex='WH',
             background_color='white')
+        self.searchView.add_subview(self.searchTf)
+        self.searchView.add_subview(self.searchTable)
 
-        self.view.add_subview(self.periodButton)
-        self.view.add_subview(self.calendarButton)
-        self.view.add_subview(self.settingsButton)
-        self.view.add_subview(self.searchButton)
-        self.view.add_subview(self.addButton)
-        self.view.add_subview(self.mainTable)
+        self.categoryView = self.MyView(flex='WH',
+            background_color='white')
+        self.categoryView.add_subview(self.periodButton)
+        self.categoryView.add_subview(self.calendarButton)
+        self.categoryView.add_subview(self.settingsButton)
+        self.categoryView.add_subview(self.searchButton)
+        self.categoryView.add_subview(self.addButton)
+        self.categoryView.add_subview(self.categoriesTable)
 
+        self.view = ui.NavigationView(self.categoryView)
+        self.view.objc_instance.navigationController().navigationBar().hidden = True #не сделал .navigation_bar_hidden=Fale, т. к. в этом случае не работает жест назад
         self.view.present(hide_close_button=False, style='popover', orientations=['portrait'])
         
+        self.searchTable.width = self.searchTable.superview.width
+        self.searchTable.height = self.searchTable.superview.height - self.searchTf.height
+        self.searchTable.x = 0
+        self.searchTable.y = self.searchTf.y + self.searchTf.height
+
+
         self.periodButton.center = (self.periodButton.superview.width*0.1,
             (self.periodButton.superview.height-(self.periodButton.height/2)))
         self.calendarButton.center = (self.calendarButton.superview.width*0.3,
@@ -73,10 +126,10 @@ class GUI():
             (self.searchButton.superview.height-(self.searchButton.height/2)))
         self.addButton.center = (self.addButton.superview.width*0.9,
             (self.addButton.superview.height-(self.addButton.height/2)))
-        self.mainTable.width = self.mainTable.superview.width
-        self.mainTable.height = (self.mainTable.superview.height-self.periodButton.height)
-        self.mainTable.center = (self.mainTable.superview.width/2,
-            (self.mainTable.superview.height-self.periodButton.height-(self.mainTable.height/2)))
+        self.categoriesTable.width = self.categoriesTable.superview.width
+        self.categoriesTable.height = (self.categoriesTable.superview.height-self.periodButton.height)
+        self.categoriesTable.center = (self.categoriesTable.superview.width/2,
+            (self.categoriesTable.superview.height-self.periodButton.height-(self.categoriesTable.height/2)))
 
         def present():    
             self.periodButton.alpha = 1.0
@@ -84,29 +137,33 @@ class GUI():
             self.settingsButton.alpha = 1.0
             self.searchButton.alpha = 1.0
             self.addButton.alpha = 1.0
-            self.mainTable.alpha = 1.0
+            self.categoriesTable.alpha = 1.0
         ui.animate(present)
 
     @ui.in_background
     def periodButtonAction(self, sender):
-        a = dialogs.list_dialog(title='Period?', items=('Day', 'Month', 'Year', 'All time', 'Custom period'), multiple=False)
+        a = dialogs.list_dialog(title='Period?', items=({'title':'Day','accessory_type':'checkmark' if self.controller.settings['mode'] == 'Day' else 'none'},
+            {'title':'Month','accessory_type':'checkmark' if self.controller.settings['mode'] == 'Month' else 'none'},
+            {'title':'Year','accessory_type':'checkmark' if self.controller.settings['mode'] == 'Year' else 'none'},
+            {'title':'All time','accessory_type':'checkmark' if self.controller.settings['mode'] == 'All time' else 'none'},
+            {'title':'Custom period','accessory_type':'checkmark' if self.controller.settings['mode'] == 'Custom period' else 'none'}), multiple=False)
         if a:
-            if a == 'All time':
+            if a['title'] == 'All time':
                 self.calendarButton.enabled = False
-                self.result = {'mode':a}
-            elif a == 'Custom period':
+                self.result = {'mode':a['title']}
+            elif a['title'] == 'Custom period':
                 self.calendarButton.enabled = False
                 fields = [{'type':'date', 'title':'From date:\t', 'key':'fromDate'},
                             {'type':'date', 'title':'To date:\t', 'key':'toDate'}]
                 dates = dialogs.form_dialog(title='Choose period', fields=fields)
                 if dates:
-                    self.result = {'mode':a, 'fromDate':dates['fromDate'], 'toDate':dates['toDate']}
+                    self.result = {'mode':a['title'], 'fromDate':dates['fromDate'], 'toDate':dates['toDate']}
                 else:
                     self.result = {'mode':self.controller.settings['initialMode']}
                     self.calendarButton.enabled = True
             else:
                 self.calendarButton.enabled = True
-                self.result = {'mode':a}
+                self.result = {'mode':a['title']}
             self.controller.periodButtonAction(self.result)
 
     @ui.in_background
@@ -148,11 +205,13 @@ class GUI():
         if settings:
             self.controller.settingsButtonAction(settings)
 
-    @ui.in_background
     def searchButtonAction(self, sender):
-        if self.searchButtonAction:
-            self.searchButtonAction(self.result)
-
+        self.searchTf.end_editing()
+        self.searchTf.text = ''
+        self.searchTableDs.items = []
+        self.view.push_view(self.searchView)
+        self.searchTf.begin_editing()
+    
     @ui.in_background
     def addButtonAction(self, sender, transactionData=None):
         if transactionData: #если редактируем существующую транзакцию
@@ -181,41 +240,85 @@ class GUI():
         transaction = self.transaction_dialog(title='Add transaction', sections=items, tfSteps=tfSteps)
         if transaction:
             self.controller.addButtonAction(transaction, transactionId)
-            self.update(self.controller.getNameForMainTable(), self.controller.getItemsForMainTable())
+            self.categoriesTableUpdate(self.controller.getNameForMainView(), self.controller.getItemsForCategoriesTable())
 
-    def mainTableRowSelectedAction(self, sender):
-        #sender = tableView.datasource from GUI
-        if sender.items[sender.selected_section]['sectionState'] == 'collapsed': #нажата секция для развертывания списка
-            sender.items[sender.selected_section]['sectionState'] = 'expanded'
-            insertList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
-            sender.tableview.insert_rows(insertList)
-            sender.reload()
-        elif sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName'] == 'Total:': #нажата строка Total для сворачивания списка
-            sender.items[sender.selected_section]['sectionState'] = 'collapsed'
-            #deleteList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
-            #sender.tableview.delete_rows(deleteList) #как-то некрасиво работает, лучше уж совсем без анимации
-            sender.reload()
-        else: #нажата конкретная транзакция для ее редактирования
-            rowId = (sender.items[sender.selected_section]['rows'][sender.selected_row]['rowId'])
-            sender.reload()
-            transactionData = self.controller.getTransaction(rowId)
-            self.addButtonAction(None, transactionData)
+    def categoriesTableRowSelectedAction(self, sender):
+        #sender = TransactionsListDataSource
+        category = sender.items[sender.selected_row]['title']
+        self.transactionsTableDs.items = self.controller.categoriesTableRowSelectedAction(category)
+        self.view.push_view(self.transactionsTable)
 
-    def mainTableRowDeletedAction(self, sender, rowId, rowSum):
-        self.controller.mainTableRowDeletedAction(sender, rowId, rowSum)
+    def transactionsTableRowSelectedAction(self, sender):
+        #sender = TransactionsListDataSource
+        transactionId = sender.items[sender.selected_row]['id']
         sender.reload()
+        transactionData = self.controller.getTransaction(transactionId)
+        self.addButtonAction(None, transactionData)
 
-    def mainTableRowAccessoryTapedAction(self, sender):
-        self.result = sender
-        self.controller.mainTableRowAccessoryTapedAction(self.result)
+    def transactionsTableRowDeletedAction(self, sender, transactionId):
+        self.controller.transactionsTableRowDeleteAction(sender, transactionId)
+        self.categoriesTableUpdate(self.controller.getNameForMainView(), self.controller.getItemsForCategoriesTable())
+        self.transactionsTable.reload()
 
-    def deleteRows(self, rowsToDelete):
-        self.mainTable.delete_rows(rowsToDelete)
+    def transactionsTableAccessoryAction(self, sender):
+        @ui.in_background
+        def showTransaction(title, transactionData):
+            a = console.alert(title=title, message=transactionData, button1='Copy', button2='Ok', hide_cancel_button=True)
+            if a == 1:
+                clipboard.set(transactionData)
 
-    def update(self, name, tableItems):
+        transactionId = sender.items[sender.tapped_accessory_row]['id']
+        self.result = transactionId
+        transactionData = self.controller.transactionsTableRowAccessoryAction(self.result)
+        title = 'Transaction data'
+
+        showTransaction(title, transactionData)
+
+    def searchTableRowSelectedAction(self, sender):
+        #sender = TransactionsListDataSource
+        self.searchTf.end_editing()
+        transactionId = sender.items[sender.selected_row]['id']
+        sender.reload()
+        transactionData = self.controller.getTransaction(transactionId)
+        self.addButtonAction(None, transactionData)
+
+    def searchTableRowDeletedAction(self, sender, transactionId):
+        self.controller.searchTableRowDeleteAction(sender, transactionId)
+        self.searchTableUpdate(self.controller.searchForTransactions(self.searchTf.text))
+
+    def searchTableAccessoryAction(self, sender):
+        @ui.in_background
+        def showTransaction(title, transactionData):
+            a = console.alert(title=title, message=transactionData, button1='Copy', button2='Ok', hide_cancel_button=True)
+            if a == 1:
+                clipboard.set(transactionData)
+
+        transactionId = sender.items[sender.tapped_accessory_row]['id']
+        self.result = transactionId
+        transactionData = self.controller.transactionsTableRowAccessoryAction(self.result)
+        title = 'Transaction data'
+
+        showTransaction(title, transactionData)
+
+    def textfield_did_change(self, tf):
+        #for self.searchTf
+        if len(tf.text) > 2: #начинаем поиск при количестве введенных символов больше 2
+            self.searchTableDs.items = self.controller.searchForTransactions(tf.text)
+        else:
+            self.searchTableDs.items = []
+
+    '''def textfield_should_return(self, textfield):
+        textfield.end_editing()
+        return True'''
+
+    def categoriesTableUpdate(self, name, tableItems):
         self.view.name = name
-        self.mainTableDataSource.items = tableItems
-        self.mainTable.reload()
+        self.categoriesTableDs.items = tableItems
+        self.categoriesTable.reload()
+
+    def searchTableUpdate(self, tableItems):
+        self.searchTableDs.items = tableItems
+        self.searchTable.reload()
 
     def transaction_dialog(self, title='', fields=None, sections=None, done_button_title='Done', tfSteps=None):
         #from dialogs
@@ -280,14 +383,14 @@ class GUI():
             return None
         else:
             return c.values
-    
+
     class TransactionDialogController ():
         #from dialogs
         def __init__(self, title, sections, done_button_title='Done', tfSteps=None):
             self.was_canceled = True
             self.shield_view = None
             self.values = {}
-            self.container_view = GUI.FormContainerView()
+            self.container_view = GUI.MyView()
             self.container_view.frame = (0, 0, 500, 500)
             self.container_view.delegate = self
             self.view = ui.TableView('grouped')
@@ -379,7 +482,8 @@ class GUI():
                             tf.autocorrection_type = False
                             tf.spellchecking_type = False
                         elif t == 'number':
-                            tf.keyboard_type = ui.KEYBOARD_NUMBERS
+                            tf.keyboard_type = ui.KEYBOARD_DECIMAL_PAD
+                            #tf.keyboard_type = ui.KEYBOARD_NUMBERS
                             tf.autocapitalization_type = ui.AUTOCAPITALIZE_NONE
                             tf.autocorrection_type = False
                             tf.spellchecking_type = False
@@ -576,21 +680,47 @@ class GUI():
             return self.cells[section][row]
         
         def textfield_did_change(self, tf):
-            self.values[tf.name] = tf.text
+            #тут происходит детекция строки на определенные паттерны:
+                #цифра(ы) и две точки или запятых - аналог нажатия enter (потому что на цифровой клавиатуре нет enter), быстрый ввод так сказать
+                #цифра(ы) и запятая или точка и две цифры - аналог нажатия enter, полный ввод стоимости
+                #одна точка или запятая в начале строки - переключение на ввод формулы (чтобы стоимость рассчитать), переключение клавиатуры на цифры+символы
+            if re.match(r"^[.,]{1}$", tf.text):
+                tf.keyboard_type = ui.KEYBOARD_NUMBERS
+                tf.text = '='
+                tf.end_editing()
+                tf.begin_editing()
+            elif re.match(r"^\d+[.,]\d{2}$", tf.text): #цифра(ы), запятая или точка, 2 цифры
+                tf.end_editing()
+                tf.text = tf.text.replace(',', '.') #меняем запятую на точку, типа делаем float
+                self.values[tf.name] = tf.text
+                self.textfield_should_return(tf)
+            elif re.match(r"^\d+[.,]{2}$", tf.text): #цифра(ы), две запятые или точки
+                tf.end_editing()
+                tf.text = (tf.text[0:-2] + '.00') #убираем последние запятые или точки и добавляем запятую и два нуля, типа делаем float
+                self.values[tf.name] = tf.text 
+                self.textfield_should_return(tf)
+            elif re.match(r"^=\d+(?:[,.]\d+)?(?:[\+-]\d+(?:[,.]\d+)?){1,50}=$", tf.text): #=число(возможно float с точкой или запятой) +- число(возможно float с точкой или запятой) от 1 до 50 раз =
+                s = tf.text[1:-1].replace(',', '.') #убираем знаки равно по краям, меняем запятые на точки
+                s = eval(s)
+                s = '{:.2f}'.format(s)
+                tf.text = str(s)
+                self.values[tf.name] = tf.text
+            else:
+                self.values[tf.name] = tf.text         
 
         def textfield_did_end_editing(self, tf):
             pass
 
         def textfield_should_return(self, tf):
+            #сюда попадаем, когда в tf закончен ввод
+            #это сделано для автоматического начала редактирования следующего tf, если список tfSteps не пуст
             tf.end_editing()
             try:
                 self.tfSteps.remove(tf.name) #пытаемся удалить tf из списка tfSteps, если он там есть - удаляем, если нет - ничего не делаем
             except:
                 return #если tf не в списке tfSteps - не делаем ничего
-            if len(self.tfSteps) == 0: #прошагали по всем tf из tfSteps - скроллим на выбор категории
-                def scroll():
-                        self.view.content_offset = (self.offset)
-                ui.animate(scroll)
+            if len(self.tfSteps) == 0:
+                return #прошагали по всем tfSteps
             else:
                 a = self.tfSteps[0] #имя следующего tf, а так же и имя TableViewCell
                 b = self.view[a] #TableViewCell, обращаемся к subviews по имени. superView - self.view, то есть TableView
@@ -600,7 +730,7 @@ class GUI():
         def switch_action(self, sender):
             self.values[sender.name] = sender.value
         
-        def done_action(self, sender):
+        def done_action(self, sender): #user input validation here
             try:
                 self.values['price'] = float(self.values['price'])
                 if self.values.get('category', None) or self.values['newCategory'] != '':
@@ -613,27 +743,13 @@ class GUI():
             except:
                 pass
 
-    class FormContainerView(ui.View):
-            #from dialogs
-            def __init__(self):
-                self.delegate = None
-                
-            def keyboard_frame_will_change(self, f):
-                r = ui.convert_rect(f, to_view=self)
-                if r[3] > 0:
-                    kbh = self.height - r[1]
-                else:
-                    kbh = 0
-                if self.delegate:
-                    self.delegate.update_kb_height(kbh)
-
     class SettingsDialogController(TransactionDialogController):
         #from dialogs
         def __init__(self, title, sections, done_button_title='Done'):
             self.was_canceled = True
             self.shield_view = None
             self.values = {}
-            self.container_view = GUI.FormContainerView()
+            self.container_view = GUI.MyView()
             self.container_view.frame = (0, 0, 500, 500)
             self.container_view.delegate = self
             self.view = ui.TableView('grouped')
@@ -1025,162 +1141,15 @@ class GUI():
                 self.was_canceled = False
                 self.container_view.close()
 
-    class DbListDataSource():
-        #определяем свой формат данных, пилим свои методы, т. к. в ui.ListDataSource нет поддержки секций для табицы.
-
-        #items = [{'sectionState':'collapsed', 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]},
-        #         {'sectionState':'expanded' , 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]},
-        #         {'sectionState':'expanded' , 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]}]
-        
-        #sectionState = свернута или развернута секция (collapsed, expanded)
-        #sectionName = название секции, то есть категория транзакций
-        #sectionSum = сумма всех цен транзакций в данной категории
-        #rowId = id транзакции, не отображается в таблице, но нужен для редактирования транзакции при нажатии на строку таблицы. По этому id идет обращение к БД
-        #rowDate = дата транзакции
-        #rowName = имя транзакции
-        #rowSum = цена транзакции
-        #первая строка в каждой секции - Total: numberOfRows. Сделано для сворачивания секции. Отображает количество строк в данной секции
-
-        def __init__(self, items, action=None, editAction=None, accessoryAction=None, deleteEnabled=True, moveEnabled=False):
-            self.tableview = None
-            self.reload_disabled = False
-            self.delete_enabled = deleteEnabled
-            self.move_enabled = moveEnabled
-
-            self.action = action
-            self.edit_action = editAction
-            self.accessory_action = accessoryAction
-
-            self.tapped_accessory_row = -1
-            self.selected_row = -1
-            self.tapped_accessory_section = -1
-            self.selected_section = -1
-
-            self.items = items
-
-            self.text_color = None
-            self.highlight_color = None
-            self.font = None #('<system>', 12)
-            self.number_of_lines = 0 #uses as many lines, as needed to display a text
-
-        def reload(self):
-            if self.tableview and not self.reload_disabled:
-                self.tableview.reload()
-
-        def tableview_cell_for_row(self, tv, section, row):
-            self.tableview = tv
-            cell = ui.TableViewCell(style='value1')
-
-            if self.items[section]['sectionState'] == 'collapsed': #при свернутой секции у нас в ней всегда будет только одна строка с названием секции и суммой секции
-                item1 = self.items[section]['sectionName'] #sectionName
-                item2 = str(self.items[section]['sectionSum']) #sectionSum
-                cell.text_label.number_of_lines = self.number_of_lines
-                cell.detail_text_label.text = item2
-                cell.text_label.text = item1
-                cell.selectable = False
-                return cell
-            elif self.items[section]['sectionState'] == 'expanded':
-                if self.items[section]['rows'][row]['rowDate']: #показываем транзакцию
-                    if self.items[section]['rows'][row]['rowName'] == '':
-                        item1 = self.items[section]['rows'][row]['rowDate']
-                    else:
-                        item1 = self.items[section]['rows'][row]['rowDate'] + '\n' + self.divideString(TABLECELLLENGHT, self.items[section]['rows'][row]['rowName']) #rowDate + rowName. rowName разбит на строки не длиннее TABLECELLLENGHT
-                    cell.accessory_type = 'detail_button'
-                else:
-                    item1 = self.items[section]['rows'][row]['rowName'] #показываем строку Total:
-                item2 = str(self.items[section]['rows'][row]['rowSum']) #rowSum
-                cell.text_label.number_of_lines = self.number_of_lines
-                cell.detail_text_label.text = item2
-                cell.text_label.text = item1
-                cell.text_label.font = SMALLFONT
-                cell.detail_text_label.font = SMALLFONT
-                cell.selectable = False
-                return cell
-
-        def tableview_number_of_sections(self, tv):
-            self.tableview = tv
-            if self.items:
-                return len(self.items)
-            else:
-                return 0
-
-        def tableview_number_of_rows(self, tv, section):
-            if self.items:
-                if self.items[section]['sectionState'] == 'collapsed':
-                    return 1 #если секция свернута - у нас в ней одна строка, само название секции и сумма за период
-                elif self.items[section]['sectionState'] == 'expanded':
-                    return len(self.items[section]['rows'])
-            else:
-                return 0
-
-        def tableview_can_delete(self, tv, section, row):
-            if self.items[section]['sectionState'] == 'collapsed' or self.items[section]['rows'][row]['rowName'] == 'Total:':
-                return False
-            else:
-                return True
-
-        def tableview_can_move(self, tv, section, row):
-            return self.move_enabled
-
-        def tableview_title_for_header(self, tv, section):
-            if self.items[section]['sectionState'] == 'collapsed':
-                return '' #при свернутой секции возвращаем пустую строку, тогда она не будет отображаться вообще, только ее первая и единственная строка
-            elif self.items[section]['sectionState'] == 'expanded':
-                return (self.items[section]['sectionName']+'\t('+str(self.items[section]['sectionSum'])+')')
-
-        def tableview_title_for_footer(self, tv, section):
-            return None
-
-        def tableview_accessory_button_tapped(self, tv, section, row):
-            self.tapped_accessory_row = row
-            self.tapped_accessory_section = section
-            if self.accessory_action:
-                self.accessory_action(self)
-
-        def tableview_did_select(self, tv, section, row):
-            self.selected_row = row
-            self.selected_section = section
-            if self.action:
-                self.action(self)
-
-        def tableview_did_deselect(self, tv, section, row):
-            pass
-
-        def tableview_title_for_delete_button(self, tv, section, row):
-            return 'Delete'
-            
-        def tableview_move_row(self, tv, from_section, from_row, to_section, to_row):
-            pass
-
-        def tableview_delete(self, tableview, section, row):
-            # Called when the user confirms deletion of the given row.
-            rowId = self.items[section]['rows'][row]['rowId']
-            rowSum = self.items[section]['rows'][row]['rowSum']
-            self.reload_disabled = True
-            del self.items[section]['rows'][row]
-            self.reload_disabled = False
-            tableview.delete_rows([(row, section), ])
-            if self.edit_action:
-                self.edit_action(self, rowId, rowSum)
-
-        def divideString(self, lenght, string):
-            #делим длинную строку переносами строки.
-            if len(string) > lenght:
-                try:
-                    indexToReplace = string.rindex(' ', 0, lenght) #вычисляем индекс последнего пробела в диапазоне 0-LENGHT
-                    string = string[:indexToReplace]+ '\n' + self.divideString(lenght, string[indexToReplace+1:]) #заменяем его на символ переноса строки '\n', остаток строки еще раз рекурсивно засылаем в divideString()
-                    return string
-                except:
-                    string = string[:lenght-3] + '...' #если пробелов в первых LENGHT-символов нет - заменяем последние 3 символа точками, остальное отбрасывем
-                    return string
-            else:
-                return string
-
-    class TitledListDataSource(ui.ListDataSource):
+    class TransactionsListDataSource(ui.ListDataSource):
         #отличия от стандартного ui.ListDataSource:
-        # -заголовок, который отображается как имя единственной секции
-        # -ячейки не выделяются при выборе (cell.selectable=False)
-        def __init__(self, items, title='', action=None, editAction=None, accessoryAction=None, deleteEnabled=False, moveEnabled=False):
+        # заголовок, который отображается как имя единственной секции
+        #футер
+        # ячейки не выделяются при выборе (cell.selectable=False)
+        # есть отображение cell.detail_text_label.text
+        #меняется шрифт
+        def __init__(self, items, controller, title=None, titleEnabled=False, footerEnabled=False, action=None, editAction=None, accessoryAction=None, deleteEnabled=False, moveEnabled=False, font=None):
+            self.controller = controller
             self.tableview = None
             self.reload_disabled = False
             self.delete_enabled = deleteEnabled
@@ -1196,23 +1165,52 @@ class GUI():
             self.selected_section = -1
 
             self.title = title
-            self.items = items
+            self.titleEnabled = titleEnabled
+            self.footerEnabled = footerEnabled
+
+            if items is not None:
+                self.items = items
+            else:
+                self.items = ui.ListDataSourceList([], self)
 
             self.text_color = None
             self.highlight_color = None
-            self.font = None #('<system>', 12)
+            self.font = font #('<system>', 12)
             self.number_of_lines = 0 #uses as many lines, as needed to display a text
 
         def tableview_title_for_header(self, tv, section):
-            return self.title
+            if self.titleEnabled == True and len(self.items) > 0:
+                category = self.items[0].get('header', '')
+                total = 0.0
+                for row in self.items:
+                    total = total + self.controller.priceToFloat(row['title2'])
+                total = self.controller.floatToPrice(total)
+                self.title = f'{category}\t({total})'
+                return self.title
         
+        def tableview_title_for_footer(self, tv, section):
+            if self.footerEnabled == True:
+                numberOfTransactions = len(self.items)
+                if numberOfTransactions == 0:
+                    return None
+                elif numberOfTransactions == 1:
+                    return f'{numberOfTransactions} transaction'
+                else:
+                    return f'{numberOfTransactions} transactions'
+            else:
+                return None
+
         def tableview_cell_for_row(self, tv, section, row):
             item = self.items[row]
-            cell = ui.TableViewCell()
+            cell = ui.TableViewCell(style='value1')
             cell.text_label.number_of_lines = self.number_of_lines
             cell.selectable = False
             if isinstance(item, dict):
                 cell.text_label.text = item.get('title', '')
+                cell.detail_text_label.text = item.get('title2', '')
+                if self.font:
+                    cell.text_label.font = self.font
+                    cell.detail_text_label.font = self.font
                 img = item.get('image', None)
                 if img:
                     if isinstance(img, basestring):
@@ -1232,20 +1230,44 @@ class GUI():
                 cell.text_label.font = self.font
             return cell
 
+        def tableview_delete(self, tv, section, row):
+            self.reload_disabled = True
+            transactionId = self.items[row]['id']
+            del self.items[row]
+            self.reload_disabled = False
+            tv.delete_rows([row])
+            if self.edit_action:
+                self.edit_action(self, transactionId)
+            self.reload()
+
     class MyView(ui.View):
+        #from dialogs
+        #нужно для обработки события появления клавиатуры
+        def __init__(self, flex='', background_color=None, delegate=None):
+            self.flex = flex
+            self.background_color = background_color
+            self.delegate = delegate
+            
+        def keyboard_frame_will_change(self, f):
+            r = ui.convert_rect(f, to_view=self)
+            if r[3] > 0:
+                kbh = self.height - r[1]
+            else:
+                kbh = 0
+            try:
+                self.delegate.update_kb_height(kbh)
+            except:
+                pass
+
         def will_close(self):
+            #сюда попадаем при использовании кнопки закрыть, либо при закрытии свайпом
             pass
 
-    class MyTextFieldDelegate():
-        def __init__(self, textFieldDidChangedAction, textFieldShouldReturnAction):
-            self.textFieldDidChangedAction = textFieldDidChangedAction
-            self.textFieldShouldReturnAction = textFieldShouldReturnAction
-
-        def textfield_did_change(self, textfield):
-            self.textFieldDidChangedAction(textfield)
-
-        def textfield_should_return(self, textfield): #here we are when you pressing Return button on screen keyboard
-            self.textFieldShouldReturnAction(textfield)
+        def layout(self):
+            try:
+                self.delegate.layoutAction()
+            except:
+                pass
 
 class Model(): #sqlite3 data access layer
     def __init__(self, controller):
@@ -1316,52 +1338,56 @@ class Model(): #sqlite3 data access layer
         connection.close()
         return total
     
-    def getTransactionsFromPeriod(self, period):
+    def getCategoriesFromPeriod(self, period):
         connection = sqlite3.connect(DB)
         connection.row_factory = sqlite3.Row
         db = connection.cursor()
-        #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
-        #подвыборка сделана для сортировки, т. к. внутри group_concat сортировку не сделать нормально
-        transactions = db.execute('''SELECT category,
-                            count(price) as numOfTransactions,
-                            sum(price) as total,
-                            group_concat(name, "\t") as names,
-                            group_concat(price, "\t") as prices,
-                            group_concat(date(date), "\t") as dates,
-                            group_concat(id, "\t") as ids
-                            FROM (SELECT id,
-                                        category,
-                                        name,
-                                        price,
-                                        date FROM purchases
-                                        WHERE date(date) BETWEEN ? AND ?
-                                        ORDER BY date DESC)
-                            GROUP BY category
-                            ORDER BY sum(price) DESC''', period).fetchall()    
+        categories = db.execute('''SELECT category as category,
+            sum(price) as total
+            FROM purchases
+            WHERE date(date) BETWEEN ? AND ?
+            GROUP BY category
+            ORDER BY sum(price) DESC''', period).fetchall()    
+        connection.close()
+        return categories
+
+    def getCategoriesFromAllTime(self):
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        categories = db.execute('''SELECT category as category,
+            sum(price) as total
+            FROM purchases
+            GROUP BY category
+            ORDER BY sum(price) DESC''').fetchall()    
+        connection.close()
+        return categories
+
+    def getTransactionsFromPeriod(self, periodAndCategory):
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        transactions = db.execute('''SELECT id as id,
+            name as name,
+            date as date,
+            price as price
+            FROM purchases
+            WHERE date(date) BETWEEN ? AND ? AND category = ?
+            ORDER BY date DESC''', periodAndCategory).fetchall()    
         connection.close()
         return transactions
 
-    def getTransactionsFromAllTime(self, period):
-        #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
-        #добавлен пустой входной параметр period для удобства и совместимости в Controller.getItemsForMainTable()
+    def getTransactionsFromAllTime(self, period, category):
         connection = sqlite3.connect(DB)
         connection.row_factory = sqlite3.Row
         db = connection.cursor()
-        transactions = db.execute('''SELECT category,
-                            count(price) as numOfTransactions,
-                            sum(price) as total,
-                            group_concat(name, "\t") as names,
-                            group_concat(price, "\t") as prices,
-                            group_concat(date(date), "\t") as dates,
-                            group_concat(id, "\t") as ids
-                            FROM (SELECT id,
-                                        category,
-                                        name,
-                                        price,
-                                        date FROM purchases
-                                        ORDER BY date DESC)
-                            GROUP BY category
-                            ORDER BY sum(price) DESC''').fetchall()
+        transactions = db.execute('''SELECT id as id,
+            name as name,
+            date(date) as date,
+            price as price
+            FROM purchases
+            WHERE category = ?
+            ORDER BY date DESC''', category).fetchall()    
         connection.close()
         return transactions
 
@@ -1401,6 +1427,22 @@ class Model(): #sqlite3 data access layer
         db.execute('UPDATE settings SET categories=? WHERE id=?', (newCategories, USERSETTINGSID))
         connection.commit()
         connection.close()
+
+    def searchForTransactions(self, keyString1, keyString2):
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        transactions = db.execute('''SELECT id as Id,
+            name as name,
+            date as date,
+            price as price,
+            category as category,
+            note as note
+            FROM purchases
+            WHERE name LIKE ? OR name LIKE ?
+            ORDER BY date DESC''', ('%{}%'.format(keyString1), '%{}%'.format(keyString2))).fetchall()
+        connection.close()
+        return transactions
 
     def getSettings(self, mode='user'):
         if mode == 'user': #user settings
@@ -1457,23 +1499,23 @@ class Controller():
         self.fromDate = None #datetime object
         self.toDate = None #datetime object
         
-        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
+        self.gui.categoriesTableUpdate(self.getNameForMainView(), self.getItemsForCategoriesTable())
 
     def periodButtonAction(self, result):
         self.settings['mode'] = result['mode']
         self.fromDate = result.get('fromDate', None)
         self.toDate = result.get('toDate', None)
-        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())     
+        self.gui.categoriesTableUpdate(self.getNameForMainView(), self.getItemsForCategoriesTable())     
 
     def calendarButtonAction(self, result):
         self.date = result
-        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
+        self.gui.categoriesTableUpdate(self.getNameForMainView(), self.getItemsForCategoriesTable())
 
     def settingsButtonAction(self, settings):
         if settings['reset'] == True:
             self.model.resetToDefaultSettings()
             self.updateSettings()
-            self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
+            self.gui.categoriesTableUpdate(self.getNameForMainView(), self.getItemsForCategoriesTable())
         else:
             self.settings['initialMode'] = settings['initialMode']
             self.settings['localDateFormat'] = settings['localDateFormat']
@@ -1484,7 +1526,7 @@ class Controller():
                 self.settings['newCategories'] = '\t'.join(self.settings['categories'])
             self.model.updateSettings(self.settings)
             self.updateSettings()
-            self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
+            self.gui.categoriesTableUpdate(self.getNameForMainView(), self.getItemsForCategoriesTable())
 
     def searchButtonAction(self):
         pass
@@ -1504,26 +1546,66 @@ class Controller():
         else:
             raise ValueError('В транзакции отсутствует обязательное(ые) поле(я). Category и/или Price')
 
-    def mainTableRowDeletedAction(self, sender, rowId, rowSum):
-        sender.items[sender.selected_section]['rows'][0]['rowSum'] -= 1 #0 строка - Total
-        sender.items[sender.selected_section]['sectionSum'] = self.floatToPrice(self.priceToFloat(sender.items[sender.selected_section]['sectionSum']) - self.priceToFloat(rowSum))
-        if sender.items[sender.selected_section]['sectionSum'] == '0': #удаляем секцию, если в ней нет транзакций
-            del sender.items[sender.selected_section]
-        self.model.deleteTransaction(rowId)
+    def categoriesTableRowSelectedAction(self, category):
+        if self.settings['mode'] == 'Day':
+            periodAndCategory = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'), category)
+            transactions = self.model.getTransactionsFromPeriod(periodAndCategory)
+        elif self.settings['mode'] == 'Month':
+            periodAndCategory = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'), category)
+            transactions = self.model.getTransactionsFromPeriod(periodAndCategory)
+        elif self.settings['mode'] == 'Year':
+            periodAndCategory = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'), category)
+            transactions = self.model.getTransactionsFromPeriod(periodAndCategory)
+        elif self.settings['mode'] == 'Custom period':
+            periodAndCategory = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'), category)
+            transactions = self.model.getTransactionsFromPeriod(periodAndCategory)
+        elif self.settings['mode'] == 'All time':
+            transactions = self.model.getTransactionsFromAllTime((category, ))
+        else:
+            raise ValueError('Несоответствующее значение')
 
-    def mainTableRowAccessoryTapedAction(self, sender):
-        @ui.in_background
-        def showTransaction(title, result):
-            a = console.alert(title=title, message=result, button1='Copy', button2='Ok', hide_cancel_button=True)
-            if a == 1:
-                clipboard.set(result)
+        result = []
+        for row in transactions:
+            string = {}
+            string['header'] = category
+            string['id'] = row['id']
+            date = datetime.datetime.strptime(row['date'], DEFAULTFORMATDAY).strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['day']) #меняем дату под локаль
+            name = self.divideString(TABLECELLLENGHT, row['name']) #name разбит на строки не длиннее TABLECELLLENGHT
+            string['title'] = date + '\n' + name
+            string['title2'] = self.floatToPrice(row['price'])
+            string['accessory_type'] = 'detail_button'
+            result.append(string)
+        return result
 
-        rowId = sender.items[sender.tapped_accessory_section]['rows'][sender.tapped_accessory_row]['rowId']
-        res = self.getTransaction(rowId)
-        title = 'Transaction data'
+    def transactionsTableRowAccessoryAction(self, transactionId):
+        res = self.getTransaction(transactionId)
         fullRes = 'ID: '+str(res['id'])+'\nName: '+res['name']+'\nCategory: '+res['category']+'\nPrice: '+str(res['price'])+'\nDate: '+res['date']+'\nNote: '+res['note']
+        return fullRes
 
-        showTransaction(title, fullRes)
+    def transactionsTableRowDeleteAction(self, sender, transactionId):
+        self.model.deleteTransaction(transactionId)
+
+    def searchTableRowDeleteAction(self, sender, transactionId):
+        self.model.deleteTransaction(transactionId)
+
+    def searchForTransactions(self, keyString):
+        #keyString приводится ко всем малым символам (a) и к первому заглавному символу (b),
+        #тк поиск по кириллице sqlite3 case-sensitive
+        a = keyString.lower()
+        b = a.capitalize()
+        transactions = self.model.searchForTransactions(a, b)
+
+        result = []
+        for row in transactions:
+            string = {}
+            string['id'] = row['id']
+            date = datetime.datetime.strptime(row['date'], DEFAULTFORMATDAY).strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['day']) #меняем дату под локаль
+            name = self.divideString(TABLECELLLENGHT, row['name']) #name разбит на строки не длиннее TABLECELLLENGHT
+            string['title'] = date + '\n' + row['category'] + '\n' + name
+            string['title2'] = self.floatToPrice(row['price'])
+            string['accessory_type'] = 'detail_button'
+            result.append(string)
+        return result
 
     def floatToPrice(self, fPrice, mode='rough'):
         if fPrice == None:
@@ -1540,12 +1622,12 @@ class Controller():
             return 0.0
         else:
             return (float(price[0:-2].replace(' ', '')))
-    
+
     def getNow(self): #return datetime object
         now = self.model.getNow()
         return datetime.datetime.strptime(now, '%Y-%m-%d %H:%M:%S')
 
-    def getNameForMainTable(self):
+    def getNameForMainView(self):
         if self.settings['mode'] == 'Day':
             period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
             total = self.model.getTotalPriceFromPeriod(period)
@@ -1568,40 +1650,29 @@ class Controller():
         else:
             raise ValueError('Несоответствующее значение')
 
-    def getItemsForMainTable(self):
+    def getItemsForCategoriesTable(self):
         if self.settings['mode'] == 'Day':
             period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
-            getTransaction = self.model.getTransactionsFromPeriod
+            categories = self.model.getCategoriesFromPeriod(period)
         elif self.settings['mode'] == 'Month':
             period = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'))
-            getTransaction = self.model.getTransactionsFromPeriod
+            categories = self.model.getCategoriesFromPeriod(period)
         elif self.settings['mode'] == 'Year':
             period = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'))
-            getTransaction = self.model.getTransactionsFromPeriod
+            categories = self.model.getCategoriesFromPeriod(period)
         elif self.settings['mode'] == 'Custom period':
             period = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
-            getTransaction = self.model.getTransactionsFromPeriod
+            categories = self.model.getCategoriesFromPeriod(period)
         elif self.settings['mode'] == 'All time':
-            period = None
-            getTransaction = self.model.getTransactionsFromAllTime
+            categories = self.model.getCategoriesFromAllTime()
         else:
             raise ValueError('Несоответствующее значение')
 
-        transactions = getTransaction(period)
         result = []
-        for row in transactions:
+        for row in categories:
             string = {}
-            string['sectionState'] = 'collapsed'
-            string['sectionName'] = row['category']
-            string['sectionSum'] = self.floatToPrice(float(row['total']))
-            string['rows'] = [{'rowId':None, 'rowDate':None, 'rowName':'Total:', 'rowSum':row['numOfTransactions']}, ]
-            for i in range(row['numOfTransactions']):
-                #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
-                r = {'rowId':row['ids'].split('\t')[i],
-                    'rowDate':datetime.datetime.strptime(row['dates'].split('\t')[i], DEFAULTFORMATDAY).strftime(LOCALDATEFORMAT[self.settings['localDateFormat']]['day']), #меняем дату под локаль
-                    'rowName':row['names'].split('\t')[i],
-                    'rowSum':self.floatToPrice(float(row['prices'].split('\t')[i]))}
-                string['rows'].append(r)
+            string['title'] = row['category']
+            string['title2'] = self.floatToPrice(row['total'])
             result.append(string)
         return result
 
@@ -1628,6 +1699,19 @@ class Controller():
 
     def updateSettings(self):
         self.settings = self.getSettings()
+    
+    def divideString(self, lenght, string):
+        #делим длинную строку переносами строки.
+        if len(string) > lenght:
+            try:
+                indexToReplace = string.rindex(' ', 0, lenght) #вычисляем индекс последнего пробела в диапазоне 0-LENGHT
+                string = string[:indexToReplace]+ '\n' + self.divideString(lenght, string[indexToReplace+1:]) #заменяем его на символ переноса строки '\n', остаток строки еще раз рекурсивно засылаем в divideString()
+                return string
+            except:
+                string = string[:lenght-3] + '...' #если пробелов в первых LENGHT-символов нет - заменяем последние 3 символа точками, остальное отбрасывем
+                return string
+        else:
+            return string
 
 controller = Controller()
 if len(sys.argv) > 1:
