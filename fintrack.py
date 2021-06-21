@@ -1,15 +1,16 @@
-import sys, ui, dialogs, pickle, os, sqlite3, threading, random, datetime, ctypes, console, clipboard
+import sys, ui, dialogs, pickle, os, sqlite3, threading, datetime, ctypes, console, clipboard
 
-DB = './fintrack text primary key.db'
+DB = '/private/var/mobile/Library/Mobile Documents/iCloud~com~omz-software~Pythonista3/Documents/FinTrack/fintrack.db' #sqlite3 db
 
 TABLECELLLENGHT = 30 #количесвто символов, которое помещается в одной строке таблицы (когда категория открыта), зависит от размера шрифта SMALLFONT
 SMALLFONT = ('<system>', 14) #размер шрифта в таблице в открытой категории (он меньше чем шрифт самой категории)
-CURRENCYSYMBOL =  ' ₽'
 INITIALMODE = 'M' #режим, в котором стартует приложение по умолчанию, D = Date, M = Month, Y = Year, A = All time
 
-DATEFORMATDAY = '%d.%m.%Y' #can be changed for your local format, default is Europe (Russia)
-DATEFORMATMONTH = '%B %Y'
-DATEFORMATYEAR = '%Y'
+CURRENCYSYMBOL =  ' ₽'
+DEFAULTDATEFORMATDAY = '%Y-%m-%d' #defaul date format from sqlite3
+LOCALDATEFORMATDAY = '%d.%m.%Y' #can be changed for your local format, this is the Europe (Russia)
+LOCALDATEFORMATMONTH = '%B %Y'
+LOCALDATEFORMATYEAR = '%Y'
 
 CALENDAR = 'calendar36.png'
 PERIOD = 'period36.png'
@@ -22,36 +23,19 @@ PERIODTABLEHEIGHT = 300
 
 DATEPICKERHEIGHT = 180
 DATEPICKERDONEBUTTONHEIGHT = 72
-DPDONEBUTTONINTRANSACTIONHEIGHT = 36
-TEXTFIELDHEIGHT = 36
+DPDONEBUTTONINTRANSACTIONHEIGHT = 54
+TEXTFIELDHEIGHT = 54
+BUTTONSFONT = ('<system-bold>', 20) #так регулируется высота кнопок, а не параметром heigth
 
 class GUI():
-    def __init__(self,
-                logic,
-                name='',
-                periodButtonAction=None,
-                calendarButtonAction=None,
-                settingsButtonAction=None,
-                searchButtonAction=None,
-                addButtonAction=None,
-                rowSelectedAction=None,
-                rowDeletedAction=None,
-                rowAccessoryTapedAction=None):
-        self.periodButtonAction = periodButtonAction
-        self.calendarButtonAction = calendarButtonAction
-        self.settingsButtonAction = settingsButtonAction
-        self.searchButtonAction = searchButtonAction
-        self.addButtonAction = addButtonAction
-        self.rowSelectedAction = rowSelectedAction
-        self.rowDeletedAction = rowDeletedAction
-        self.rowAccessoryTapedAction = rowAccessoryTapedAction
-
-        self.logic = logic #ссылка на logic-объект для определения работы режимов логики, дат и некоторых функций (Logic.cur)
+    def __init__(self, controller):
+        self.controller = controller
 
         self.mode = 'start' #тут хранится состояние гуя. Оно используется в обработчиках кнопок, textField, datePicker и т. д.
         self.result = None #тут хранится результат того или иного взаимодейсвтия с gui, который будет потом передан в соответствующий метод logic
         self.event = threading.Event() #флаг для ожидания пользовательского ввода в отдельном потоке
-        
+        self.categories = self.controller.getCategories() #список категорий, нужен при добавлении транзакции
+
         self.periodButton = ui.Button(image=ui.Image.named(PERIOD),
             action=self._periodButtonAction,
             alpha=0.0)
@@ -67,7 +51,7 @@ class GUI():
         self.addButton = ui.Button(image=ui.Image.named(ADD),
             action=self._addButtonAction,
             alpha=0.0)
-        self.mainTableDataSource = self.MyListDataSource(items='',
+        self.mainTableDataSource = self.DbListDataSource(items=None,
             action=self._mainTableRowSelectedAction,
             editAction=self._mainTableRowDeletedAction,
             accessoryAction=self._mainTableRowAccessoryTapedAction)
@@ -75,12 +59,13 @@ class GUI():
             delegate=self.mainTableDataSource,
             editing = False,
             alpha=0.0)
-        self.periodTableDataSource = ui.ListDataSource(items=('Day',
-                'Month',
-                'Year',
-                'Period',
-                'All time'))
-        self.periodTableDataSource.action=self._periodTableRowSelectedAction
+        self.periodTableDataSource = self.TitledListDataSource(items=('Day',
+                    'Month',
+                    'Year',
+                    'Period',
+                    'All time'),
+            title='Period?',
+            action=self._periodTableRowSelectedAction)
         self.periodTable = ui.TableView(data_source=self.periodTableDataSource,
             delegate=self.periodTableDataSource,
             editing=False,
@@ -88,6 +73,7 @@ class GUI():
             corner_radius=5,
             width=PERIODTABLEWIDTH,
             height=PERIODTABLEHEIGHT,
+            scroll_enabled=False,
             alpha=0.0)
         self.datePicker = ui.DatePicker(name='Дата?',
             mode=ui.DATE_PICKER_MODE_DATE,
@@ -99,7 +85,7 @@ class GUI():
             height=DATEPICKERHEIGHT,
             alpha=0.0)
         self.datePickerDoneButton = ui.Button(title='Done',
-            font=('<system-bold>', 20),
+            font=BUTTONSFONT,
             action=self._datePickerDoneButtonAction,
             background_color='ceced2',
             border_width=1,
@@ -116,7 +102,7 @@ class GUI():
             alpha=0.0)
         self.textFieldEnterButton = ui.Button(title='Enter',
             action=self._textFieldEnterButtonAction,
-            height=TEXTFIELDHEIGHT,
+            font=BUTTONSFONT,
             background_color='ceced2',
             border_width=1,
             border_color='white',
@@ -125,7 +111,7 @@ class GUI():
             enabled=False)
         self.textFieldDoneButton = ui.Button(title='Done',
             action=self._textFieldDoneButtonAction,
-            height=TEXTFIELDHEIGHT,
+            font=BUTTONSFONT,
             background_color='ceced2',
             border_width=1,
             border_color='white',
@@ -134,7 +120,7 @@ class GUI():
             enabled=False)
         self.textFieldCalendarButton = ui.Button(title='📆',
             action=self._textFieldelCalendarButtonAction,
-            height=TEXTFIELDHEIGHT,
+            font=BUTTONSFONT,
             background_color='ceced2',
             border_width=1,
             border_color='white',
@@ -142,7 +128,7 @@ class GUI():
             alpha=0.0)
         self.textFieldCancelButton = ui.Button(title='❌',
             action=self._textFieldCancelButtonAction,
-            height=TEXTFIELDHEIGHT,
+            font=BUTTONSFONT,
             background_color='ceced2',
             border_width=1,
             border_color='white',
@@ -158,7 +144,7 @@ class GUI():
             height=DATEPICKERHEIGHT,
             alpha=0.0)
         self.textFieldDatePickerDoneButton = ui.Button(title='Done',
-            font=('<system-bold>', 20),
+            font=BUTTONSFONT,
             action=self._textFieldDatePickerDoneButtonAction,
             background_color='ceced2',
             border_width=1,
@@ -169,7 +155,7 @@ class GUI():
 
         self.view = self.MyView(keyboardFrameChangedAction=self.subViewsResize,
             layoutChangedAction=self.subViewsResize,
-            name=name,            
+            name='',            
             flex='WH',
             background_color='white')
 
@@ -189,7 +175,7 @@ class GUI():
         self.view.add_subview(self.textFieldCancelButton)
         self.view.add_subview(self.textFieldDatePicker)
         self.view.add_subview(self.textFieldDatePickerDoneButton)
-        self.view.present(hide_close_button=False)
+        self.view.present(hide_close_button=False, style='popover', orientations=['portrait'])
         
         def present():
             self.periodButton.alpha = 1.0
@@ -244,8 +230,7 @@ class GUI():
             self.datePickerDoneButton.alpha = 0.0
 
         def exit():
-            if self.calendarButtonAction:
-                self.calendarButtonAction(self.result)
+            self.controller.calendarButtonAction(self.result)
 
         self.event.clear()
         ui.animate(present)
@@ -255,19 +240,11 @@ class GUI():
 
     @ui.in_background
     def _settingsButtonAction(self, sender):
-        def exit():
-            if self.settingsButtonAction:
-                self.settingsButtonAction(self.result)
-
-        def present():
-            pass
-
-        ui.animate(present)
+        print(dialogs.list_dialog(title='Period?', items=['Day', 'Month', 'Year', 'All time', 'Custom period']))
 
     @ui.in_background
     def _searchButtonAction(self, sender):
-        if self.searchButtonAction:
-            self.searchButtonAction(self.result)
+        print(dialogs.date_dialog(title='Date?'))
 
     @ui.in_background
     def _addButtonAction(self, sender, transactionData=None):
@@ -308,11 +285,10 @@ class GUI():
             self.mainTable.touch_enabled = True
 
         def exit():
-            self.status = 'start'
-
-            if self.addButtonAction:
-                self.addButtonAction(self.result)
-                self.update(self.logic.getNameForGui(), self.logic.getTableItemsForGui())
+            if self.status == 'addingTransaction' or self.status == 'doneTransaction':
+                self.status = 'start'
+                self.controller.addButtonAction(self.result)
+                self.update(self.controller.getNameForMainTable(), self.controller.getItemsForMainTable())
 
         ui.animate(present)
 
@@ -325,13 +301,7 @@ class GUI():
         
         #запрос категории
         if self.status == 'addingTransaction':
-            connection = sqlite3.connect(DB)
-            connection.row_factory = lambda cursor, row: row[0] #эта магия позволяет возвращать из db список, а не список кортежей, то есть возвращает нулевой элемент каждого кортежа
-            db = connection.cursor()
-            categories = db.execute('SELECT name FROM categories ORDER BY id').fetchall()
-            connection.close()
-
-            selectedCategory = dialogs.list_dialog(title='Категория?', items=categories, multiple=False)
+            selectedCategory = dialogs.list_dialog(title='Категория?', items=self.categories, multiple=False)
 
             if selectedCategory == None:
                 self.status = 'start'
@@ -347,7 +317,7 @@ class GUI():
             self.textFieldDoneButton.alpha = 1.0
             self.textField.alpha = 1.0
             if self.result['price']:
-                self.textField.text = self.result['price']
+                self.textField.text = str(self.result['price'])
             else:
                 self.textField.text=''
             self.textField.placeholder = 'Цена?'
@@ -383,18 +353,30 @@ class GUI():
         ui.animate(hide, completion=exit)
 
     def _mainTableRowSelectedAction(self, sender):
-        if self.rowSelectedAction:
-            self.result = sender
-            self.rowSelectedAction(self.result)
+        #sender = tableView.datasource from GUI
+        if sender.items[sender.selected_section]['sectionState'] == 'collapsed': #нажата секция для развертывания списка
+            sender.items[sender.selected_section]['sectionState'] = 'expanded'
+            insertList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
+            sender.tableview.insert_rows(insertList)
+            sender.reload()
+        elif sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName'] == 'Total:': #нажата строка Total для сворачивания списка
+            sender.items[sender.selected_section]['sectionState'] = 'collapsed'
+            #deleteList = [(x+1, sender.selected_section) for x in range(sender.items[sender.selected_section]['rows'][0]['rowSum'])] #смортим в numberOfRows
+            #sender.tableview.delete_rows(deleteList) #как-то некрасиво работает, лучше уж совсем без анимации
+            sender.reload()
+        else: #нажата конкретная транзакция для ее редактирования
+            rowId = (sender.items[sender.selected_section]['rows'][sender.selected_row]['rowId'])
+            sender.reload()
+            transactionData = self.controller.getTransaction(rowId)
+            self._addButtonAction(None, transactionData)
 
-    def _mainTableRowDeletedAction(self, sender):
-        if self.rowDeletedAction:
-            self.rowDeletedAction()
+    def _mainTableRowDeletedAction(self, sender, rowId, rowSum):
+        self.controller.mainTableRowDeletedAction(sender, rowId, rowSum)
+        sender.reload()
 
     def _mainTableRowAccessoryTapedAction(self, sender):
-        if self.rowAccessoryTapedAction:
-            self.result = sender
-            self.rowAccessoryTapedAction(self.result)
+        self.result = sender
+        self.controller.mainTableRowAccessoryTapedAction(self.result)
 
     @ui.in_background
     def _periodTableRowSelectedAction(self, sender):
@@ -411,8 +393,7 @@ class GUI():
             self.mainTable.alpha = 1.0
 
         def exit():
-            if self.periodButtonAction:
-                self.periodButtonAction(self.result)
+            self.controller.periodButtonAction(self.result)
 
         if sender.items[sender.selected_row] == 'Period':
             #далее действия происходят в _datePickerAction и _datePickerDoneButtonAction
@@ -422,7 +403,7 @@ class GUI():
                 self.datePicker.center = (self.datePicker.superview.width/2,
                     self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
                 
-                self.datePickerDoneButton.title = ('From '+self.datePicker.date.strftime(DATEFORMATDAY))
+                self.datePickerDoneButton.title = ('From '+self.datePicker.date.strftime(LOCALDATEFORMATDAY))
                 self.datePickerDoneButton.enabled = True
                 self.periodTable.alpha = 0.0
                 self.datePicker.alpha = 1.0
@@ -437,7 +418,7 @@ class GUI():
                     (self.datePickerDoneButton.superview.height-self.addButton.height-self.datePickerDoneButton.height/2))
                 self.datePicker.center = (self.datePicker.superview.width/2,
                     self.datePickerDoneButton.frame[1]-self.datePicker.height/2)
-                self.datePickerDoneButton.title = ('To '+self.datePicker.date.strftime(DATEFORMATDAY))
+                self.datePickerDoneButton.title = ('To '+self.datePicker.date.strftime(LOCALDATEFORMATDAY))
                 self.datePicker.alpha = 1.0
                 self.datePickerDoneButton.alpha = 1.0
 
@@ -461,9 +442,9 @@ class GUI():
 
     def _datePickerAction(self, sender): #тут будем менять заголовок кнопки datePickerDoneButton в режиме выбора периода дат, с 'From datePicker.date' на 'To datePickerDate'
         if self.mode == 'selectingFromDate':
-            self.datePickerDoneButton.title = 'From   ' + self.datePicker.date.strftime(DATEFORMATDAY)
+            self.datePickerDoneButton.title = 'From   ' + self.datePicker.date.strftime(LOCALDATEFORMATDAY)
         elif self.mode == 'selectingToDate':
-            self.datePickerDoneButton.title = 'To   ' + self.datePicker.date.strftime(DATEFORMATDAY)
+            self.datePickerDoneButton.title = 'To   ' + self.datePicker.date.strftime(LOCALDATEFORMATDAY)
         else:
             pass
 
@@ -583,9 +564,6 @@ class GUI():
         self.textFieldDatePicker.width = self.textFieldDatePicker.superview.width
         self.textFieldDatePicker.center = (self.textFieldDatePicker.superview.width/2,
             self.textFieldDatePickerDoneButton.frame[1]-self.datePicker.height/2)        
-    
-    def insertRows(self, rowsToInsert):
-        self.mainTable.insert_rows(rowsToInsert)
 
     def deleteRows(self, rowsToDelete):
         self.mainTable.delete_rows(rowsToDelete)
@@ -594,24 +572,23 @@ class GUI():
         self.view.name = name
         self.mainTableDataSource.items = tableItems
         self.mainTable.reload()
-    
-    def addTransaction(self, transactionData=None):
-        self._addButtonAction(None, transactionData)
 
-    class MyListDataSource():
-        #пилим свои методы, т. к. в ui.ListDataSource нет поддержки секций для табицы.
+    class DbListDataSource():
+        #определяем свой формат данных, пилим свои методы, т. к. в ui.ListDataSource нет поддержки секций для табицы.
 
-        #items = [{'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]},
-        #         {'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]},
-        #         {'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]}]
+        #items = [{'sectionState':'collapsed', 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]},
+        #         {'sectionState':'expanded' , 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]},
+        #         {'sectionState':'expanded' , 'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowDate':'', 'rowName':'Total:', 'rowSum':'numberOfRows'}, {'rowId':'', 'rowDate':'', 'rowName':'', 'rowSum':''}]}]
         
+        #sectionState = свернута или развернута секция (collapsed, expanded)
         #sectionName = название секции, то есть категория транзакций
         #sectionSum = сумма всех цен транзакций в данной категории
         #rowId = id транзакции, не отображается в таблице, но нужен для редактирования транзакции при нажатии на строку таблицы. По этому id идет обращение к БД
+        #rowDate = дата транзакции
         #rowName = имя транзакции
         #rowSum = цена транзакции
+        #первая строка в каждой секции - Total: numberOfRows. Сделано для сворачивания секции. Отображает количество строк в данной секции
 
-        #rowName может быть простой строкой, а может быть списком словарей, смотри документацию на ui.ListDataSource
         def __init__(self, items, action=None, editAction=None, accessoryAction=None, deleteEnabled=True, moveEnabled=False):
             self.tableview = None
             self.reload_disabled = False
@@ -632,7 +609,7 @@ class GUI():
             self.text_color = None
             self.highlight_color = None
             self.font = None #('<system>', 12)
-            self.number_of_lines = 1
+            self.number_of_lines = 0 #uses as many lines, as needed to display a text
 
         def reload(self):
             if self.tableview and not self.reload_disabled:
@@ -640,60 +617,67 @@ class GUI():
 
         def tableview_cell_for_row(self, tv, section, row):
             self.tableview = tv
-            item1 = self.items[section]['rows'][row]['rowName'] #rowName
-            item2 = self.items[section]['rows'][row]['rowSum'] #rowSum
             cell = ui.TableViewCell(style='value1')
-            cell.text_label.number_of_lines = self.number_of_lines
-            cell.detail_text_label.text = str(item2)
-            if isinstance(item1, dict):
-                cell.text_label.text = item1.get('title', '')
-                img = item1.get('image', None)
-                if img:
-                    if isinstance(img, basestring):
-                        cell.image_view.image = Image.named(img)
-                    elif isinstance(img, Image):
-                        cell.image_view.image = img
-                accessory = item1.get('accessory_type', 'none')
-                cell.accessory_type = accessory
-            else:
-                cell.text_label.text = str(item1)
-            if self.text_color:
-                cell.text_label.text_color = self.text_color
-            if self.highlight_color:
-                bg_view = View(background_color=self.highlight_color)
-                cell.selected_background_view = bg_view
-            if self.font:
-                cell.text_label.font = self.font
-            if self.items[section]['sectionName'] != '':
+
+            if self.items[section]['sectionState'] == 'collapsed': #при свернутой секции у нас в ней всегда будет только одна строка с названием секции и суммой секции
+                item1 = self.items[section]['sectionName'] #sectionName
+                item2 = str(self.items[section]['sectionSum']) #sectionSum
+                cell.text_label.number_of_lines = self.number_of_lines
+                cell.detail_text_label.text = item2
+                cell.text_label.text = item1
+                cell.selectable = False
+                return cell
+            elif self.items[section]['sectionState'] == 'expanded':
+                if self.items[section]['rows'][row]['rowDate']: #показываем транзакцию
+                    if self.items[section]['rows'][row]['rowName'] == '':
+                        item1 = self.items[section]['rows'][row]['rowDate']
+                    else:
+                        item1 = self.items[section]['rows'][row]['rowDate'] + '\n' + self.divideString(TABLECELLLENGHT, self.items[section]['rows'][row]['rowName']) #rowDate + rowName. rowName разбит на строки не длиннее TABLECELLLENGHT
+                    cell.accessory_type = 'detail_button'
+                else:
+                    item1 = self.items[section]['rows'][row]['rowName'] #показываем строку Total:
+                item2 = str(self.items[section]['rows'][row]['rowSum']) #rowSum
+                cell.text_label.number_of_lines = self.number_of_lines
+                cell.detail_text_label.text = item2
+                cell.text_label.text = item1
                 cell.text_label.font = SMALLFONT
                 cell.detail_text_label.font = SMALLFONT
-                cell.accessory_type = 'detail_button'
-            return cell
+                cell.selectable = False
+                return cell
 
         def tableview_number_of_sections(self, tv):
             self.tableview = tv
-            if self.items !=None:
+            if self.items:
                 return len(self.items)
             else:
                 return 0
 
         def tableview_number_of_rows(self, tv, section):
-            if self.items != None:
-                return len(self.items[section]['rows'])
+            if self.items:
+                if self.items[section]['sectionState'] == 'collapsed':
+                    return 1 #если секция свернута - у нас в ней одна строка, само название секции и сумма за период
+                elif self.items[section]['sectionState'] == 'expanded':
+                    return len(self.items[section]['rows'])
             else:
                 return 0
 
         def tableview_can_delete(self, tv, section, row):
-            return self.delete_enabled
+            if self.items[section]['sectionState'] == 'collapsed' or self.items[section]['rows'][row]['rowName'] == 'Total:':
+                return False
+            else:
+                return True
 
         def tableview_can_move(self, tv, section, row):
             return self.move_enabled
 
         def tableview_title_for_header(self, tv, section):
-            if self.items[section]['sectionName'] == '':
-                return ''
-            else:
-                return (self.items[section]['sectionName']+'\t('+self.items[section]['sectionSum']+')')
+            if self.items[section]['sectionState'] == 'collapsed':
+                return '' #при свернутой секции возвращаем пустую строку, тогда она не будет отображаться вообще, только ее первая и единственная строка
+            elif self.items[section]['sectionState'] == 'expanded':
+                return (self.items[section]['sectionName']+'\t('+str(self.items[section]['sectionSum'])+')')
+
+        def tableview_title_for_footer(self, tv, section):
+            return None
 
         def tableview_accessory_button_tapped(self, tv, section, row):
             self.tapped_accessory_row = row
@@ -711,18 +695,90 @@ class GUI():
             pass
 
         def tableview_title_for_delete_button(self, tv, section, row):
-            return ('Delete')
-
+            return 'Delete'
+            
         def tableview_move_row(self, tv, from_section, from_row, to_section, to_row):
             pass
 
-        def tableview_delete(self, tv, section, row):
+        def tableview_delete(self, tableview, section, row):
+            # Called when the user confirms deletion of the given row.
+            rowId = self.items[section]['rows'][row]['rowId']
+            rowSum = self.items[section]['rows'][row]['rowSum']
             self.reload_disabled = True
-            del self.items[section][1][row]
+            del self.items[section]['rows'][row]
             self.reload_disabled = False
-            tv.delete_rows((section, row))
+            tableview.delete_rows([(row, section), ])
             if self.edit_action:
-                self.edit_action(self)
+                self.edit_action(self, rowId, rowSum)
+
+        def divideString(self, lenght, string):
+            #делим длинную строку переносами строки.
+            if len(string) > lenght:
+                try:
+                    indexToReplace = string.rindex(' ', 0, lenght) #вычисляем индекс последнего пробела в диапазоне 0-LENGHT
+                    string = string[:indexToReplace]+ '\n' + self.divideString(lenght, string[indexToReplace+1:]) #заменяем его на символ переноса строки '\n', остаток строки еще раз рекурсивно засылаем в divideString()
+                    return string
+                except:
+                    string = string[:lenght-3] + '...' #если пробелов в первых LENGHT-символов нет - заменяем последние 3 символа точками, остальное отбрасывем
+                    return string
+            else:
+                return string
+
+    class TitledListDataSource(ui.ListDataSource):
+        #отличия от стандартного ui.ListDataSource:
+        # -заголовок, который отображается как имя единственной секции
+        # -ячейки не выделяются при выборе (cell.selectable=False)
+        def __init__(self, items, title='', action=None, editAction=None, accessoryAction=None, deleteEnabled=False, moveEnabled=False):
+            self.tableview = None
+            self.reload_disabled = False
+            self.delete_enabled = deleteEnabled
+            self.move_enabled = moveEnabled
+
+            self.action = action
+            self.edit_action = editAction
+            self.accessory_action = accessoryAction
+
+            self.tapped_accessory_row = -1
+            self.selected_row = -1
+            self.tapped_accessory_section = -1
+            self.selected_section = -1
+
+            self.title = title
+            self.items = items
+
+            self.text_color = None
+            self.highlight_color = None
+            self.font = None #('<system>', 12)
+            self.number_of_lines = 0 #uses as many lines, as needed to display a text
+
+        def tableview_title_for_header(self, tv, section):
+            return self.title
+        
+        def tableview_cell_for_row(self, tv, section, row):
+            item = self.items[row]
+            cell = ui.TableViewCell()
+            cell.text_label.number_of_lines = self.number_of_lines
+            cell.selectable = False
+            if isinstance(item, dict):
+                cell.text_label.text = item.get('title', '')
+                img = item.get('image', None)
+                if img:
+                    if isinstance(img, basestring):
+                        cell.image_view.image = Image.named(img)
+                    elif isinstance(img, Image):
+                        cell.image_view.image = img
+                accessory = item.get('accessory_type', 'none')
+                cell.accessory_type = accessory
+            else:
+                cell.text_label.text = str(item)
+            if self.text_color:
+                cell.text_label.text_color = self.text_color
+            if self.highlight_color:
+                bg_view = View(background_color=self.highlight_color)
+                cell.selected_background_view = bg_view
+            if self.font:
+                cell.text_label.font = self.font
+            return cell
 
     class MyView(ui.View):
         def __init__(self, keyboardFrameChangedAction, layoutChangedAction, name, flex, background_color):
@@ -754,14 +810,171 @@ class GUI():
         def textfield_should_return(self, textfield): #here we are when you pressing Return button on screen keyboard
             self.textFieldShouldReturnAction(textfield)
 
-class Logic():
-    def __init__(self):
-        self.mode = INITIALMODE
-        self.date = self.now() #datetime object
-        self.fromDate = None #datetime object
-        self.toDate = None #datetime object
+class Model(): #sqlite3 data access layer
+    def __init__(self, controller):
+        self.controller = controller
         if not os.path.isfile(DB):
             self.createDb()
+
+    def createDb(self):
+        conn = sqlite3.connect(DB)
+        cur = conn.cursor()
+        
+        cur.execute('''CREATE TABLE IF NOT EXISTS purchases(
+                            id INTEGER PRIMARY KEY,
+                            name TEXT,
+                            category TEXT,
+                            price REAL,
+                            date TEXT,
+                            note TEXT)''')
+
+        cur.execute('''CREATE TABLE IF NOT EXISTS categories(
+                                    id INTEGER PRIMARY KEY,
+                                    name TEXT)''')
+
+        testDataCategories = [('Продукты', ),
+                    ('Хозяйство', ),
+                    ('Бытовая химия', ),
+                    ('Анка', ),
+                    ('Машина', ),
+                    ('Фастфуд', ),
+                    ('Бензин', ),
+                    ('Долги', ),
+                    ('Другое', ),
+                    ('Жилье', ),
+                    ('Здоровье', ),
+                    ('Канцелярия', ),
+                    ('Обед на работе', ),
+                    ('Одежда', ),
+                    ('Подарки', ),
+                    ('Проезд', ),
+                    ('Развлечения', ),
+                    ('Саша', ),
+                    ('Связь', ),
+                    ('Списание', ),
+                    ('Стрижка', )]
+
+        cur.executemany('INSERT INTO categories (name) VALUES(?)', testDataCategories)
+        conn.commit()
+        conn.close()
+
+    def getNow(self): #return local time datetime string '%Y-%m-%d %H:%M:%S'
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        now = db.execute('SELECT datetime("now", "localtime")').fetchone()[0]
+        connection.close()
+        return now
+
+    def getTotalPriceFromPeriod(self, period):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        total = db.execute('SELECT sum(price) FROM purchases WHERE date(date) BETWEEN ? AND ?', period).fetchone()[0]
+        connection.close()
+        return total
+
+    def getTotalPriceFromAllTime(self):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        total = db.execute('SELECT sum(price) FROM purchases').fetchone()[0]
+        connection.close()
+        return total
+    
+    def getTransactionsFromPeriod(self, period):
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
+        #подвыборка сделана для сортировки, т. к. внутри group_concat сортировку не сделать нормально
+        transactions = db.execute('''SELECT category,
+                            count(price) as numOfTransactions,
+                            sum(price) as total,
+                            group_concat(name, "\t") as names,
+                            group_concat(price, "\t") as prices,
+                            group_concat(date(date), "\t") as dates,
+                            group_concat(id, "\t") as ids
+                            FROM (SELECT id,
+                                        category,
+                                        name,
+                                        price,
+                                        date FROM purchases
+                                        WHERE date(date) BETWEEN ? AND ?
+                                        ORDER BY date DESC)
+                            GROUP BY category
+                            ORDER BY sum(price) DESC''', period).fetchall()    
+        connection.close()
+        return transactions
+
+    def getTransactionsFromAllTime(self, period):
+        #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
+        #добавлен пустой входной параметр period для удобства и совместимости в Controller.getItemsForMainTable()
+        connection = sqlite3.connect(DB)
+        connection.row_factory = sqlite3.Row
+        db = connection.cursor()
+        transactions = db.execute('''SELECT category,
+                            count(price) as numOfTransactions,
+                            sum(price) as total,
+                            group_concat(name, "\t") as names,
+                            group_concat(price, "\t") as prices,
+                            group_concat(date(date), "\t") as dates,
+                            group_concat(id, "\t") as ids
+                            FROM (SELECT id,
+                                        category,
+                                        name,
+                                        price,
+                                        date FROM purchases
+                                        ORDER BY date DESC)
+                            GROUP BY category
+                            ORDER BY sum(price) DESC''').fetchall()
+        connection.close()
+        return transactions
+
+    def getCategories(self):
+        connection = sqlite3.connect(DB)
+        connection.row_factory = lambda cursor, row: row[0] #эта магия позволяет возвращать из db список, а не список кортежей, то есть возвращает нулевой элемент каждого кортежа
+        db = connection.cursor()
+        categories = db.execute('SELECT name FROM categories ORDER BY id').fetchall()
+        connection.close()
+        return categories
+
+    def getTransaction(self, rowId):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        transaction = db.execute('SELECT id, name, category, price, date, note FROM purchases WHERE id = ?', (rowId, )).fetchone()
+        connection.close()
+        return transaction
+
+    def updateTransaction(self, transactionData):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        db.execute('UPDATE purchases SET name=?, category=?, price=?, date=?, note=? WHERE id=?', (transactionData['name'], transactionData['category'], transactionData['price'], transactionData['date'], transactionData['note'], transactionData['id']))
+        connection.commit()
+        connection.close()
+
+    def addTransaction(self, transactionData):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        db.execute('INSERT INTO purchases (name, category, price, date, note) VALUES(?, ?, ?, ?, ?)', (transactionData['name'], transactionData['category'], transactionData['price'], transactionData['date'], transactionData['note']))
+        connection.commit()
+        connection.close()
+
+    def deleteTransaction(self, transactionId):
+        connection = sqlite3.connect(DB)
+        db = connection.cursor()
+        db.execute('DELETE FROM purchases WHERE id = ?', (transactionId, ))
+        connection.commit()
+        connection.close()
+
+class Controller():
+    def __init__(self):
+        self.model = Model(self)
+        self.gui = GUI(self)
+
+        self.mode = INITIALMODE
+        self.date = self.getNow() #datetime object
+        self.fromDate = None #datetime object
+        self.toDate = None #datetime object
+        
+        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
 
     def periodButtonAction(self, result):
         if result[0] == 'Day':
@@ -778,11 +991,11 @@ class Logic():
             self.mode = 'All'
         else:
             raise ValueError('Несоответствующее значение')
-        gui.update(logic.getNameForGui(), logic.getTableItemsForGui())     
+        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())     
 
     def calendarButtonAction(self, result):
         self.date = result
-        gui.update(logic.getNameForGui(), logic.getTableItemsForGui())
+        self.gui.update(self.getNameForMainTable(), self.getItemsForMainTable())
 
     def settingsButtonAction(self):
         print('settingsButtonAction')
@@ -791,110 +1004,23 @@ class Logic():
         print('searchButtonAction')
 
     def addButtonAction(self, result):
-        if result['id'] and result['category'] and result['price']: #режим редактирования транзакции, будем ее перезаписывать по этому id
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            db.execute('UPDATE purchases SET name=?, category=?, price=?, date=?, note=? WHERE id=?', (result['name'], result['category'], result['price'], result['date'], result['note'], result['id']))
-            connection.commit()
-            connection.close() 
-        elif result['category'] and result['price']: #режим добавления транзакции
+        if result['id'] and result['category'] and result['price']: #режим редактирования транзакции, т. к. есть id, будем ее перезаписывать по этому id
+            self.model.updateTransaction(result)
+        elif result['category'] and result['price']: #режим добавления транзакции, т. к. нет id
             if not result['date']:
-                result['date'] = str(self.now())
-            result['id'] = (result['date']+' '+self.myRandom())
-            result['note'] = ''
-
-            a = list(result.values())
-
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            db.execute('INSERT INTO purchases VALUES(?, ?, ?, ?, ?, ?)', a)
-            connection.commit()
-            connection.close()
+                result['date'] = str(self.getNow())
+            if not result['note']:
+                result['note'] = ''
+            self.model.addTransaction(result)
         else:
             raise ValueError('В транзакции отсутствует обязательное(ые) поле(я). Category и/или Price')
 
-    def mainTableRowSelectedAction(self, sender):
-        #sender = tableView from GUI
-        #sender.items = [{'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]},
-        #                {'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]},
-        #                {'sectionName':'', 'sectionSum':'', 'rows':[{'rowId':'', 'rowName':'', 'rowSum':''}, {'rowId':'', 'rowName':'', 'rowSum':''}]}]
-        def getRowFromDb(sender, mask, date, category):
-            rows = []
-            a = (mask, date, category)
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            for index, row in enumerate(db.execute('SELECT date(date), name, price, id FROM purchases WHERE strftime(?, date) = ? AND category = ? ORDER BY date DESC', a)):
-                sender.items[sender.selected_section]['rows'].append({'rowId':row[3], 'rowName':str(row[0]+' '+str(row[1])), 'rowSum':self.cur(row[2])})
-                rows.append((index+1, sender.selected_section)) #+1 потому что 0 строка - это Total:
-            connection.close()
-            return rows
-
-        def getRowFromDbPeriod(sender, mask, fromDate, toDate, category):
-            rows = []
-            a = (mask, fromDate, toDate, category)
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            for index, row in enumerate(db.execute('SELECT date(date), name, price, id FROM purchases WHERE strftime(?, date) BETWEEN ? AND ? AND category = ? ORDER BY date DESC', a)):
-                sender.items[sender.selected_section]['rows'].append({'rowId':row[3], 'rowName':str(row[0]+' '+str(row[1])), 'rowSum':self.cur(row[2])})
-                rows.append((index+1, sender.selected_section)) #+1 потому что 0 строка - это Total:
-            connection.close()
-            return rows
-
-        def getRowFromDbAll(sender, category):
-            rows = []
-            a = (category, )
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            for index, row in enumerate(db.execute('SELECT date(date), name, price, id FROM purchases WHERE category = ? ORDER BY date DESC', a)):
-                sender.items[sender.selected_section]['rows'].append({'rowId':row[3], 'rowName':str(row[0]+' '+str(row[1])), 'rowSum':self.cur(row[2])})
-                rows.append((index+1, sender.selected_section)) #+1 потому что 0 строка - это Total:
-            connection.close()
-            return rows
-
-        def getRowsToDelete(sender):
-            rows = []
-            for i in range((sender.tableview_number_of_rows(None, sender.selected_section)-1), 0, -1):
-                rows.append((i, sender.selected_section))
-            return rows
-
-        if sender.items[sender.selected_section]['sectionName'] == '': #нажата секция для развертывания списка
-            category = sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName']
-            total = sender.items[sender.selected_section]['rows'][sender.selected_row]['rowSum']
-            sender.items[sender.selected_section]['sectionName'] = category
-            sender.items[sender.selected_section]['sectionSum'] = total
-            sender.items[sender.selected_section]['rows'] = [{'rowId':'', 'rowName':'^', 'rowSum':''}, ]
-            sender.tableview.reload()
-            
-            if self.mode == 'D':
-                r = getRowFromDb(sender, '%Y-%m-%d', self.date.strftime('%Y-%m-%d'), category)
-                gui.insertRows(r)                
-            elif self.mode == 'M':
-                r = getRowFromDb(sender, '%Y-%m', self.date.strftime('%Y-%m'), category)
-                gui.insertRows(r)                
-            elif self.mode == 'Y':
-                b = getRowFromDb(sender, '%Y', self.date.strftime('%Y'), category)
-                gui.insertRows(b)
-            elif self.mode == 'P':
-                r = getRowFromDbPeriod(sender, '%Y-%m-%d', self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'), category)
-                gui.insertRows(r)
-            elif self.mode == 'All':
-                r = getRowFromDbAll(sender, category)
-                gui.insertRows(r)
-            else:
-                raise ValueError('Несоответствующее значение')    
-        elif sender.items[sender.selected_section]['rows'][sender.selected_row]['rowName'] == '^': #нажата строка Total для сворачивания списка
-            r = getRowsToDelete(sender) #это нужно сделать до модификации sender.items для корректного подсчета количества строк для удаления
-            c = [{'rowId':'', 'rowName':sender.items[sender.selected_section]['sectionName'], 'rowSum':sender.items[sender.selected_section]['sectionSum']}, ]
-            sender.items[sender.selected_section]['sectionName'] = ''
-            sender.items[sender.selected_section]['sectionSum'] = ''
-            sender.tableview.reload()
-            sender.items[sender.selected_section]['rows'] = c
-            gui.deleteRows(r)
-        else: #нажата конкретная транзакция для ее редактирования
-            pass
-            
-    def mainTableRowDeletedAction(self):
-        pass
+    def mainTableRowDeletedAction(self, sender, rowId, rowSum):
+        sender.items[sender.selected_section]['rows'][0]['rowSum'] -= 1 #0 строка - Total
+        sender.items[sender.selected_section]['sectionSum'] = self.floatToPrice(self.priceToFloat(sender.items[sender.selected_section]['sectionSum']) - self.priceToFloat(rowSum))
+        if sender.items[sender.selected_section]['sectionSum'] == '0': #удаляем секцию, если в ней нет транзакций
+            del sender.items[sender.selected_section]
+        self.model.deleteTransaction(rowId)
 
     def mainTableRowAccessoryTapedAction(self, sender):
         @ui.in_background
@@ -903,18 +1029,12 @@ class Logic():
             if a == 1:
                 clipboard.set(result)
 
-        if sender.items[sender.tapped_accessory_section]['rows'][sender.tapped_accessory_row]['rowName'] == '^':
-            print('in progress')
-        else:
-            transactionId = sender.items[sender.tapped_accessory_section]['rows'][sender.tapped_accessory_row]['rowId']
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            res = db.execute('SELECT id, date(date), category, name, price, note FROM purchases WHERE id = ?', (transactionId, )).fetchone()
-            connection.close()
-            title = 'Transaction data'
-            fullRes = 'ID: '+res[0]+'\nDate: '+res[1]+'\nCategory: '+res[2]+'\nName: '+res[3]+'\nPrice: '+str(res[4])+'\nNote: '+res[5]
+        rowId = sender.items[sender.tapped_accessory_section]['rows'][sender.tapped_accessory_row]['rowId']
+        res = self.getTransaction(rowId)
+        title = 'Transaction data'
+        fullRes = 'ID: '+str(res['id'])+'\nName: '+res['name']+'\nCategory: '+res['category']+'\nPrice: '+str(res['price'])+'\nDate: '+res['date']+'\nNote: '+res['note']
 
-            showTransaction(title, fullRes)
+        showTransaction(title, fullRes)
 
     def datePickerDoneButtonAction(self):
         pass
@@ -931,156 +1051,100 @@ class Logic():
     def textFieldCancelButtonAction(self):
         pass
 
-    def cur(self, price, mode='rough'):
-        if price == None:
-            return '0₽'
+    def floatToPrice(self, fPrice, mode='rough'):
+        if fPrice == None:
+            return '0 ₽'
         elif mode == 'rough':
-            return (format(price, ',.0f').replace(',', '  ')+CURRENCYSYMBOL)
+            return (format(fPrice, ',.0f').replace(',', '  ')+CURRENCYSYMBOL)
         elif mode == 'precisely':
-            return (format(price, ',.2f').replace(',', '  ')+CURRENCYSYMBOL)
+            return (format(fPrice, ',.2f').replace(',', '  ')+CURRENCYSYMBOL)
         else:
             raise ValueError('mode: несоответствующее значение')
 
-    def myRandom(self):
-        return str(random.randint(0, 9999))
-
-    def createDb(self):
-        conn = sqlite3.connect(DB)
-        cur = conn.cursor()
-        
-        cur.execute('''CREATE TABLE IF NOT EXISTS purchases(
-                                    id TEXT PRIMARY KEY,
-                                    name TEXT,
-                                    category TEXT,
-                                    price REAL,
-                                    date TEXT,
-                                    note TEXT)''')
-
-        cur.execute('''CREATE TABLE IF NOT EXISTS categories(
-                                    id INT PRIMARY KEY,
-                                    name TEXT)''')
-
-        testDataCategories = [(0, 'Продукты'),
-                            (1, 'Хозяйство'),
-                            (2, 'Бытовая химия'),
-                            (3, 'Анка'),
-                            (4, 'Машина'),
-                            (5, 'Фастфуд'),
-                            (6, 'Бензин'),
-                            (7, 'Долги'),
-                            (8, 'Другое'),
-                            (9, 'Жилье'),
-                            (10, 'Здоровье'),
-                            (11, 'Канцелярия'),
-                            (12, 'Обед на работе'),
-                            (13, 'Одежда'),
-                            (14, 'Подарки'),
-                            (15, 'Проезд'),
-                            (16, 'Развлечения'),
-                            (17, 'Саша'),
-                            (18, 'Связь'),
-                            (19, 'Списание'),
-                            (20, 'Стрижка')]
-        
-        cur.executemany('INSERT INTO categories VALUES(?, ?)', testDataCategories)
-        conn.commit()
-        conn.close()
+    def priceToFloat(self, price):
+        if price == None:
+            return 0.0
+        else:
+            return (float(price[0:-2].replace(' ', '')))
+    
+    def getNow(self): #return datetime object
+        now = self.model.getNow()
+        return datetime.datetime.strptime(now, '%Y-%m-%d %H:%M:%S')
 
     def getTheme(self):
         return ui.get_ui_style()
 
-    def now(self):
-        connection = sqlite3.connect(DB)
-        db = connection.cursor()
-        now = db.execute('SELECT datetime("now", "localtime")').fetchone()[0]
-        connection.close()
-        return datetime.datetime.strptime(now, '%Y-%m-%d %H:%M:%S')
-
-    def getNameForGui(self):
+    def getNameForMainTable(self):
         if self.mode == 'D':
-            maskAndDate = ('%Y-%m-%d', self.date.strftime('%Y-%m-%d'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            total = db.execute('SELECT sum(price) FROM purchases WHERE strftime(?, date) = ?', maskAndDate).fetchone()[0]
-            connection.close()
-            return (self.date.strftime(DATEFORMATDAY)+' ('+self.cur(total)+')')
+            period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
+            total = self.model.getTotalPriceFromPeriod(period)
+            return (self.date.strftime(LOCALDATEFORMATDAY)+' ('+self.floatToPrice(total)+')')
         elif self.mode == 'M':
-            maskAndDate = ('%Y-%m', self.date.strftime('%Y-%m'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            total = db.execute('SELECT sum(price) FROM purchases WHERE strftime(?, date) = ?', maskAndDate).fetchone()[0]
-            connection.close()
-            return (self.date.strftime(DATEFORMATMONTH)+' ('+self.cur(total)+')')
+            period = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'))
+            total = self.model.getTotalPriceFromPeriod(period)
+            return (self.date.strftime(LOCALDATEFORMATMONTH)+' ('+self.floatToPrice(total)+')')
         elif self.mode == 'Y':
-            maskAndDate = ('%Y', self.date.strftime('%Y'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            total = db.execute('SELECT sum(price) FROM purchases WHERE strftime(?, date) = ?', maskAndDate).fetchone()[0]
-            connection.close()
-            return (self.date.strftime(DATEFORMATYEAR)+' ('+self.cur(total)+')')
+            period = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'))
+            total = self.model.getTotalPriceFromPeriod(period)
+            return (self.date.strftime(LOCALDATEFORMATYEAR)+' ('+self.floatToPrice(total)+')')
         elif self.mode == 'P':
-            maskAndDate = ('%Y-%m-%d', self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            total = db.execute('SELECT sum(price) FROM purchases WHERE strftime(?, date) BETWEEN ? AND ?', maskAndDate).fetchone()[0]
-            connection.close()
-            return (self.fromDate.strftime(DATEFORMATDAY)+' - '+self.toDate.strftime(DATEFORMATDAY)+' ('+self.cur(total)+')')
+            period = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
+            total = self.model.getTotalPriceFromPeriod(period)
+            return (self.fromDate.strftime(LOCALDATEFORMATDAY)+' - '+self.toDate.strftime(LOCALDATEFORMATDAY)+' ('+self.floatToPrice(total)+')')
         elif self.mode == 'All':
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            total = db.execute('SELECT sum(price) FROM purchases').fetchone()[0]
-            connection.close()
-            return ('All'+' ('+self.cur(total)+')')
+            total = self.model.getTotalPriceFromAllTime()
+            return ('All'+' ('+self.floatToPrice(total)+')')
         else:
             raise ValueError('Несоответствующее значение')
 
-    def getTableItemsForGui(self):
+    def getItemsForMainTable(self):
         if self.mode == 'D':
-            maskAndDate = ('%Y-%m-%d', self.date.strftime('%Y-%m-%d'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            result =[]
-            for row in db.execute('SELECT category, sum(price) FROM purchases WHERE strftime(?, date) = ? GROUP BY category ORDER BY sum(price) DESC', maskAndDate):
-                result.append({'sectionName':'', 'sectionSum':'', 'rows':[{'rowName':str(row[0]), 'rowSum':self.cur(row[1])}]})
-            connection.close()
-            return result
+            period = (self.date.strftime('%Y-%m-%d'), self.date.strftime('%Y-%m-%d'))
+            getTransaction = self.model.getTransactionsFromPeriod
         elif self.mode == 'M':
-            maskAndDate = ('%Y-%m', self.date.strftime('%Y-%m'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            result =[]
-            for row in db.execute('SELECT category, sum(price) FROM purchases WHERE strftime(?, date) = ? GROUP BY category ORDER BY sum(price) DESC', maskAndDate):
-                result.append({'sectionName':'', 'sectionSum':'', 'rows':[{'rowName':str(row[0]), 'rowSum':self.cur(row[1])}]})
-            connection.close()
-            return result
+            period = ((self.date.strftime('%Y-%m')+'-01'), (self.date.strftime('%Y-%m')+'-31'))
+            getTransaction = self.model.getTransactionsFromPeriod
         elif self.mode == 'Y':
-            maskAndDate = ('%Y', self.date.strftime('%Y'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            result =[]
-            for row in db.execute('SELECT category, sum(price) FROM purchases WHERE strftime(?, date) = ? GROUP BY category ORDER BY sum(price) DESC', maskAndDate):
-                result.append({'sectionName':'', 'sectionSum':'', 'rows':[{'rowName':str(row[0]), 'rowSum':self.cur(row[1])}]})
-            connection.close()
-            return result
+            period = ((self.date.strftime('%Y')+'-01-01'), (self.date.strftime('%Y')+'-12-31'))
+            getTransaction = self.model.getTransactionsFromPeriod
         elif self.mode == 'P':
-            maskAndDate = ('%Y-%m-%d', self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            result =[]
-            for row in db.execute('SELECT category, sum(price) FROM purchases WHERE strftime(?, date) BETWEEN ? AND ? GROUP BY category ORDER BY sum(price) DESC', maskAndDate):
-                result.append({'sectionName':'', 'sectionSum':'', 'rows':[{'rowName':str(row[0]), 'rowSum':self.cur(row[1])}]})
-            connection.close()
-            return result
+            period = (self.fromDate.strftime('%Y-%m-%d'), self.toDate.strftime('%Y-%m-%d'))
+            getTransaction = self.model.getTransactionsFromPeriod
         elif self.mode == 'All':
-            connection = sqlite3.connect(DB)
-            db = connection.cursor()
-            result =[]
-            for row in db.execute('SELECT category, sum(price) FROM purchases GROUP BY category ORDER BY sum(price) DESC'):
-                result.append({'sectionName':'', 'sectionSum':'', 'rows':[{'rowName':str(row[0]), 'rowSum':self.cur(row[1])}]})
-            connection.close()
-            return result
+            period = None
+            getTransaction = self.model.getTransactionsFromAllTime
         else:
             raise ValueError('Несоответствующее значение')
+
+        transactions = getTransaction(period)
+        result = []
+        for row in transactions:
+            string = {}
+            string['sectionState'] = 'collapsed'
+            string['sectionName'] = row['category']
+            string['sectionSum'] = self.floatToPrice(float(row['total']))
+            string['rows'] = [{'rowId':None, 'rowDate':None, 'rowName':'Total:', 'rowSum':row['numOfTransactions']}, ]
+            for i in range(row['numOfTransactions']):
+                #разделитель в виде '\t', т. к. по умолчанию разделитель ','. А в имени транзакции могут использоваться запятые, что приведет к неправильной интерпретации
+                r = {'rowId':row['ids'].split('\t')[i],
+                    'rowDate':datetime.datetime.strptime(row['dates'].split('\t')[i], DEFAULTDATEFORMATDAY).strftime(LOCALDATEFORMATDAY), #меняем дату под локаль
+                    'rowName':row['names'].split('\t')[i],
+                    'rowSum':self.floatToPrice(float(row['prices'].split('\t')[i]))}
+                string['rows'].append(r)
+            result.append(string)
+        return result
+
+    def getCategories(self):
+        return self.model.getCategories()
+
+    def getTransaction(self, rowId):
+        rawData = self.model.getTransaction(rowId)
+        transactionData = {'id':rawData[0], 'name':rawData[1], 'category':rawData[2], 'price':rawData[3], 'date':rawData[4], 'note':rawData[5]}
+        return transactionData
+
+    def addFastTransaction(self):
+        #adding transaction from iOS shortcuts
+        self.gui._addButtonAction(None)
 
     def vibrate(self):
         c = ctypes.CDLL(None)
@@ -1089,15 +1153,9 @@ class Logic():
         vibrate_id = 0x00000fff
         p(vibrate_id)
 
-logic = Logic()
-gui = GUI(logic=logic,
-        name='',
-        periodButtonAction=logic.periodButtonAction,
-        calendarButtonAction=logic.calendarButtonAction,
-        settingsButtonAction=logic.settingsButtonAction,
-        searchButtonAction=logic.searchButtonAction,
-        addButtonAction=logic.addButtonAction,
-        rowSelectedAction=logic.mainTableRowSelectedAction,
-        rowDeletedAction=logic.mainTableRowDeletedAction,
-        rowAccessoryTapedAction=logic.mainTableRowAccessoryTapedAction)
-gui.update(logic.getNameForGui(), logic.getTableItemsForGui())
+controller = Controller()
+if len(sys.argv) > 1:
+    if sys.argv[1] == 'addTransaction':
+        controller.addFastTransaction()
+    elif sys.argv[1] == 'start':
+        pass #обычный запуск без доп действий
